@@ -16,11 +16,15 @@ if [ -x /usr/bin/logger ]; then
     /usr/bin/logger "loxberry-plugin-$pluginname - DAEMON Script from Wolf ISM8 Plugin"
 fi
 
-enabled=`awk -F'[ ]' '/enable/{print $2}' $LBPCONFIG/$pluginname/wolf_ism8i.conf`
+# Anchored pattern, and default to 0: on a fresh installation the config
+# file has no "enable" entry at all, and "[ -eq 1 ]" on an empty string
+# aborts this script with "integer expression expected" at every boot.
+enabled=$(awk '/^enable[ \t]/{print $2}' $LBPCONFIG/$pluginname/wolf_ism8i.conf 2>/dev/null)
+enabled=${enabled:-0}
 
-if [ $enabled -eq 1 ]; then
+if [ "$enabled" -eq 1 ]; then
     if [ -x /usr/bin/logger ]; then
-            /usr/bin/logger "loxberry-plugin-$pluginname - Starting olf ISM8 Server"
+            /usr/bin/logger "loxberry-plugin-$pluginname - Starting Wolf ISM8 Server"
     fi
     # Enable
     su loxberry -c "$LBHOMEDIR/bin/plugins/$pluginname/wolf_server start" > /dev/null 2>&1
