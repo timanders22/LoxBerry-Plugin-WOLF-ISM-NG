@@ -409,9 +409,17 @@ sub start_event_loop($$) {
                     # waiting for a new client connection
                     $wolf_client = $wolf_socket->accept();
 
+                    if (!$wolf_client) {
+                        # accept() can fail, e.g. when interrupted by the
+                        # alarm(1) above. Without this check the peerhost()
+                        # call below dies and the watchdog has to restart us.
+                        LOGWARN("   accept() lieferte keine Verbindung: $!");
+                        next;
+                    }
+
                     # get information about a newly connected client
                     my $client_address = $wolf_client->peerhost();
-                    $hash{ism8i_ip} = $wolf_client;
+                    $hash{ism8i_ip} = $client_address;
                     my $client_port = $wolf_client->peerport();
                     LOGINF("   Verbindung eines ISM8i Moduls von $client_address:$client_port");
 
@@ -430,7 +438,7 @@ sub start_event_loop($$) {
                 }
             }
 
-            if ($read == $wolf_client) {
+            if (defined $wolf_client and $read == $wolf_client) {
                 if (read_wolf_messages($wolf_client)) {
                     $drop_counter = 0;
                     send_OnlineState(1);
@@ -439,7 +447,7 @@ sub start_event_loop($$) {
                 }
             }
 
-            if ($drop_counter >= 10) {
+            if ($drop_counter >= 10 and defined $wolf_client) {
                 $drop_counter = 0;
                 my $client_address = $wolf_client->peerhost();
                 LOGINF("Verbindung zu $client_address abgebrochen.");
@@ -845,7 +853,7 @@ sub loadConfig
 		            $hash{dplog} = $fields[1]; } else { $hash{dplog} = '0'; }
 		      } elsif ($fields[0] eq "output") {
                          if ($fields[1] =~ m/^(csv|fhem|data|none)$/) {
-		            $hash{output} = $fields[1]; } else { $hash{dplog} = 'fhem'; }
+		            $hash{output} = $fields[1]; } else { $hash{output} = 'fhem'; }
                       } elsif ($fields[0] eq "mqtt") {
                          if ($fields[1] =~ m/^(1|0)$/) {
                             $hash{mqtt} = $fields[1]; } else { $hash{mqtt} = '0'; }
@@ -1298,7 +1306,7 @@ sub pdt_time($)
    my $hour = $b1 & 0x1f;
    my $min = $b2 & 0x3f;
    my $sec = $b3 & 0x3f;
-   return sprintf("%s%02d:%02d:%02d", $weekdays[$weekday], $hour, $min, $sec);
+   return sprintf("%s%02d:%02d:%02d", $day_str, $hour, $min, $sec);
 }
 
 sub to_pdt_time($)
