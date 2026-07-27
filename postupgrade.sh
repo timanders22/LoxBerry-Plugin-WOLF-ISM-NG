@@ -25,7 +25,8 @@ cp -v -r /tmp/${PDIR}.SAVE/* $PCONFIG/
 echo "<INFO> Remove temporary folder /tmp/${PDIR}.SAVE"
 rm -rf /tmp/${PDIR}.SAVE
 
-enabled=`awk -F'[ ]' '/enable/{print $2}' $PCONFIG/wolf_ism8i.conf`
+enabled=$(awk '/^enable[ \t]/{print $2}' $PCONFIG/wolf_ism8i.conf 2>/dev/null)
+enabled=${enabled:-0}
 
 if [ "$enabled" -eq "1" ]; then
     # Enable
