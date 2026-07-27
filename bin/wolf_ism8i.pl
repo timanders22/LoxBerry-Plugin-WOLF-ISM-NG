@@ -796,8 +796,8 @@ sub loadConfig
 #   input_port = Port auf dem das Modul auf den TCP Trafic des Loxone Miniservers hört.
 #                Default ist 12005.
 #   fw_version = Die Firmware Version des Wolf ISM8i Schnittstellenmoduls. Diese steht im Webinterface des Schnittstellenmoduls.
-#                Möglich sind 1.4 oder 1.5.
-#                Default ist 1.5.
+#                Möglich sind 1.4, 1.5, 1.7, 1.8 oder 1.9.
+#                Default ist 1.8.
 #   multicast_ip = die IPv4 Adresse der Multicast Gruppe an der die die entschlüsselten Datagramme geschickt werden. Default ist 
 #                  Bitte beim Ändern auf die Vorgaben für Multicast Adressen achten!
 #                  Default ist 239.7.7.77.
@@ -877,7 +877,7 @@ sub loadConfig
      print $fh "#   input_port = Port auf dem das Modul auf den TCP Trafic des Loxone Miniservers hört.\n";
      print $fh "#                Default ist 12005.\n";
      print $fh "#   fw_version = Die Firmware Version des Wolf ISM8i Schnittstellenmoduls. Diese steht im Webinterface des Schnittstellenmoduls.\n";
-     print $fh "#                Möglich sind: 1.4 1.5 1.7 1.8\n";
+     print $fh "#                Möglich sind: 1.4 1.5 1.7 1.8 1.9\n";
      print $fh "#                Default ist 1.8\n";
      print $fh "#   multicast_ip = die IPv4 Adresse der Multicast Gruppe an der die die entschlüsselten Datagramme geschickt werden. Default ist\n";
      print $fh "#                  Bitte beim Ändern auf die Vorgaben für Multicast Adressen achten!\n";
@@ -1063,7 +1063,7 @@ sub getCsvResult($$)
      {
           my @Heizkreis = ("Automatikbetrieb","Heizbetrieb","Standby","Sparbetrieb","-");
 	  my @CWL = ("Automatikbetrieb","Nennlüftung","-","Reduzierung Lüftung","-");
-          if ($hash{fw} eq '1.8') {
+          if ($hash{fw} eq '1.8' or $hash{fw} eq '1.9') {
             @Heizkreis = ("Automatikbetrieb","Heizbetrieb","Standby","Sparbetrieb","Permanent Kühlen");
             @CWL = ("Automatikbetrieb","Nennlüftung","-","Reduzierung Lüftung","Feuchteschutz");
           }
@@ -1091,7 +1091,7 @@ sub getCsvResult($$)
 				   
           if ($geraet =~ /CGB-2/ or $geraet =~ /MGK-2/ or $geraet =~ /TOB/ or $geraet =~ /COB-2/ or $geraet =~ /TGB/)
 	    { $v = $CGB2_MGK2_TOB[$dp_val]; }
-	  elsif ($geraet =~ /BWL-1-S/)
+	  elsif ($geraet =~ /BWL-1-S/ or $geraet =~ /CHA/ or $geraet =~ /Wärmepumpe/)
 	   	{ $v = $BWL1S[$dp_val]; }
 
 	  if (defined $v) { $result .= $v; } else { $result .= "ERR:NoResult[".$dp_id."/".$dp_val."]";}
