@@ -386,12 +386,13 @@ if ($R::form eq "1" || !$R::form) {
   $template->param( PULL_ON_WRITE => $pull_on_write );
 
   # Protocol version
-  @values = ('1.4', '1.5', '1.7', '1.8' );
+  @values = ('1.4', '1.5', '1.7', '1.8', '1.9' );
   %labels = (
         '1.4' => '1.4',
         '1.5' => '1.5',
         '1.7' => '1.7',
         '1.8' => '1.8',
+        '1.9' => '1.9',
     );
   my $version = $cgi->popup_menu(
         -name    => 'version',
