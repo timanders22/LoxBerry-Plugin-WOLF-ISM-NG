@@ -1,4 +1,4 @@
-#Datenpunkte Wolf ISM8i für Firmware 1.8
+#Datenpunkte Wolf ISM8i für Firmware 1.9
 #
 1;Heizgerät 1 (TOB,CGB-2,MGK-2,COB-2,TGB-2);Störung;DPT_Switch;Out/-;-
 2;Heizgerät 1 (TOB,CGB-2,MGK-2,COB-2,TGB-2);Betriebsart;DPT_HVACContrMode;Out/-;-
@@ -258,3 +258,45 @@
 371;Bedienmodul (BM-2);Mischersolltemperatur MK3;DPT_Value_Temp;Out/-;°C
 #
 372;Allgmein;Zuletzt aktiver Störcode;DPT_Value_1_Ucount;Out/-;-
+#
+212;Wärmepumpe 2 (BWL-1-S, CHA);Störung;DPT_Switch;Out/-;-
+213;Wärmepumpe 2 (BWL-1-S, CHA);Betriebsart;DPT_HVACContrMode;Out/-;-
+214;Wärmepumpe 2 (BWL-1-S, CHA);Heizleistung;DPT_Power;Out/-;kW
+215;Wärmepumpe 2 (BWL-1-S, CHA);Kühlleistung;DPT_Power;Out/-;kW
+216;Wärmepumpe 2 (BWL-1-S, CHA);Kesseltemperatur;DPT_Value_Temp;Out/-;°C
+217;Wärmepumpe 2 (BWL-1-S, CHA);Rücklauftemperatur;DPT_Value_Temp;Out/-;°C
+218;Wärmepumpe 2 (BWL-1-S, CHA);Status Heizkreispumpe;DPT_Switch;Out/-;-
+219;Wärmepumpe 2 (BWL-1-S, CHA);Status Zubringer-/Heizkreispumpe;DPT_Switch;Out/-;-
+220;Wärmepumpe 2 (BWL-1-S, CHA);Status 3-Wege-Umschaltventil HZ/WW;DPT_OpenClose;Out/-;-
+221;Wärmepumpe 2 (BWL-1-S, CHA);Status 3-Wege-Umschaltventil HZ/K;DPT_OpenClose;Out/-;-
+222;Wärmepumpe 2 (BWL-1-S, CHA);Status E-Heizung;DPT_Switch;Out/-;-
+223;Wärmepumpe 2 (BWL-1-S, CHA);Anlagendruck;DPT_Value_Pres;Out/-;Pa
+224;Wärmepumpe 2 (BWL-1-S, CHA);Leistungsaufnahme;DPT_Power;Out/-;kW
+#
+225;Wärmepumpe 3 (BWL-1-S, CHA);Störung;DPT_Switch;Out/-;-
+226;Wärmepumpe 3 (BWL-1-S, CHA);Betriebsart;DPT_HVACContrMode;Out/-;-
+227;Wärmepumpe 3 (BWL-1-S, CHA);Heizleistung;DPT_Power;Out/-;kW
+228;Wärmepumpe 3 (BWL-1-S, CHA);Kühlleistung;DPT_Power;Out/-;kW
+229;Wärmepumpe 3 (BWL-1-S, CHA);Kesseltemperatur;DPT_Value_Temp;Out/-;°C
+230;Wärmepumpe 3 (BWL-1-S, CHA);Rücklauftemperatur;DPT_Value_Temp;Out/-;°C
+231;Wärmepumpe 3 (BWL-1-S, CHA);Status Heizkreispumpe;DPT_Switch;Out/-;-
+232;Wärmepumpe 3 (BWL-1-S, CHA);Status Zubringer-/Heizkreispumpe;DPT_Switch;Out/-;-
+233;Wärmepumpe 3 (BWL-1-S, CHA);Status 3-Wege-Umschaltventil HZ/WW;DPT_OpenClose;Out/-;-
+234;Wärmepumpe 3 (BWL-1-S, CHA);Status 3-Wege-Umschaltventil HZ/K;DPT_OpenClose;Out/-;-
+235;Wärmepumpe 3 (BWL-1-S, CHA);Status E-Heizung;DPT_Switch;Out/-;-
+236;Wärmepumpe 3 (BWL-1-S, CHA);Anlagendruck;DPT_Value_Pres;Out/-;Pa
+237;Wärmepumpe 3 (BWL-1-S, CHA);Leistungsaufnahme;DPT_Power;Out/-;kW
+#
+238;Wärmepumpe 4 (BWL-1-S, CHA);Störung;DPT_Switch;Out/-;-
+239;Wärmepumpe 4 (BWL-1-S, CHA);Betriebsart;DPT_HVACContrMode;Out/-;-
+240;Wärmepumpe 4 (BWL-1-S, CHA);Heizleistung;DPT_Power;Out/-;kW
+241;Wärmepumpe 4 (BWL-1-S, CHA);Kühlleistung;DPT_Power;Out/-;kW
+242;Wärmepumpe 4 (BWL-1-S, CHA);Kesseltemperatur;DPT_Value_Temp;Out/-;°C
+243;Wärmepumpe 4 (BWL-1-S, CHA);Rücklauftemperatur;DPT_Value_Temp;Out/-;°C
+244;Wärmepumpe 4 (BWL-1-S, CHA);Status Heizkreispumpe;DPT_Switch;Out/-;-
+245;Wärmepumpe 4 (BWL-1-S, CHA);Status Zubringer-/Heizkreispumpe;DPT_Switch;Out/-;-
+246;Wärmepumpe 4 (BWL-1-S, CHA);Status 3-Wege-Umschaltventil HZ/WW;DPT_OpenClose;Out/-;-
+247;Wärmepumpe 4 (BWL-1-S, CHA);Status 3-Wege-Umschaltventil HZ/K;DPT_OpenClose;Out/-;-
+248;Wärmepumpe 4 (BWL-1-S, CHA);Status E-Heizung;DPT_Switch;Out/-;-
+249;Wärmepumpe 4 (BWL-1-S, CHA);Anlagendruck;DPT_Value_Pres;Out/-;Pa
+250;Wärmepumpe 4 (BWL-1-S, CHA);Leistungsaufnahme;DPT_Power;Out/-;kW

@@ -1,0 +1,49 @@
+<h2>Wolf ISM8 Server</h2>
+
+<p>Das Plugin nimmt die Daten des Wolf-Schnittstellenmoduls ISM8 entgegen,
+&uuml;bersetzt die KNX-Telegramme in lesbare Werte und reicht sie an den
+Miniserver weiter &mdash; per MQTT oder, auf dem alten Weg, per UDP.
+In der Gegenrichtung nimmt es Schreibbefehle des Miniservers entgegen.</p>
+
+<h3>In vier Schritten eingerichtet</h3>
+<ol>
+<li>Im ISM8 die Adresse des LoxBerry und den ISM8-TCP-Port eintragen
+    (Vorgabe 12004). Beides steht im Reiter <i>Einbindung in Loxone</i>.</li>
+<li>Im Reiter <i>Einstellungen</i> den Server einschalten und speichern.</li>
+<li>Im Reiter <i>Einbindung in Loxone</i> die Ger&auml;te anhaken, die
+    gebraucht werden, und die MQTT-Vorlagen herunterladen.</li>
+<li>In Loxone Config: Rechtsklick auf den Miniserver &rarr;
+    <i>Vorlage einf&uuml;gen</i>.</li>
+</ol>
+
+<h3>MQTT oder TCP/UDP?</h3>
+<p><b>MQTT ist der empfohlene Weg.</b> Die Themen sind benannt
+(<tt>wolfism8/&lt;Ger&auml;t&gt;/&lt;Datenpunkt&gt;</tt>), die Werte kommen
+retained an &mdash; nach einem Neustart des Miniservers steht der letzte Stand
+sofort wieder da &mdash; und im MQTT Finder des Gateways ist sichtbar, was
+tats&auml;chlich ankommt.</p>
+
+<p>Die <b>TCP/UDP-Direktausgabe</b> ist der alte Weg und ab Werk ausgeschaltet.
+Sie wird nur gebraucht, wenn eine bestehende Loxone-Konfiguration daran
+h&auml;ngt. Beide Wege lassen sich w&auml;hrend der Umstellung gleichzeitig
+betreiben.</p>
+
+<h3>Wenn keine Werte ankommen</h3>
+<ul>
+<li>Reiter <i>Test</i> &rarr; <i>Serverzustand</i>: laufen Watchdog und
+    Auswertungsmodul?</li>
+<li>Reiter <i>Test</i> &rarr; <i>Netzwerkports pr&uuml;fen</i>: horcht der
+    ISM8-Port?</li>
+<li>Das ISM8 sendet <b>nur bei Wert&auml;nderungen</b>. Nach einem Neustart
+    kann es dauern, bis das erste Telegramm kommt. Eine Solltemperatur am
+    Ger&auml;t zu verstellen erzwingt eines.</li>
+<li>Reiter <i>Logdateien</i>: das Protokoll des Servers nennt den Grund
+    meistens im Klartext.</li>
+</ul>
+
+<h3>Firmware</h3>
+<p>Die Datenpunkttabelle h&auml;ngt an der Firmware des ISM8 (1.4, 1.5, 1.7,
+1.8 oder 1.9). Die eingestellte Version muss zu der passen, die in der
+Weboberfl&auml;che des ISM8 steht &mdash; sonst stimmen die Datenpunktnummern
+nicht. Nach einer Umstellung m&uuml;ssen die Loxone-Vorlagen neu erzeugt
+werden.</p>

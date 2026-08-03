@@ -106,9 +106,9 @@ my %hash = (
 my $version = LoxBerry::System::pluginversion();
 
 my $log = LoxBerry::Log->new ( name => 'server' , addtime => 1);
-			
+
 ## Ablauf starten ###########################################################
-			
+
 LOGSTART "Starting $0 Version $version";
 
 LOGINF "############ Starte Wolf ISM8i Auswertungs-Modul ############";
@@ -252,7 +252,7 @@ sub start_IGMPserver
    ) or die "ERROR: Cant create socket: $@! ";
 
    # ACHTUNG: kein $igmp_sock->mcast_add() bei Server!
-   
+
    LOGINF("   Creating to multicast group success.");
 }
 
@@ -337,11 +337,11 @@ sub start_CommandServer()
 }
 
 sub start_WolfServer()
-#Startet einen blocking Server(Loop) an dem sich das Wolf ISM8i Modul verbinden und seine Daten schicken kann. 
+#Startet einen blocking Server(Loop) an dem sich das Wolf ISM8i Modul verbinden und seine Daten schicken kann.
 {
    # auto-flush on socket
    $| = 1;
- 
+
    # creating a listening socket
    my $socket = new IO::Socket::INET (
       LocalHost => '0.0.0.0',
@@ -411,7 +411,7 @@ sub start_event_loop($$) {
 
                     # get information about a newly connected client
                     my $client_address = $wolf_client->peerhost();
-                    $hash{ism8i_ip} = $wolf_client;
+                    $hash{ism8i_ip} = $client_address;
                     my $client_port = $wolf_client->peerport();
                     LOGINF("   Verbindung eines ISM8i Moduls von $client_address:$client_port");
 
@@ -430,7 +430,7 @@ sub start_event_loop($$) {
                 }
             }
 
-            if ($read == $wolf_client) {
+            if (defined $wolf_client and $read == $wolf_client) {
                 if (read_wolf_messages($wolf_client)) {
                     $drop_counter = 0;
                     send_OnlineState(1);
@@ -439,7 +439,7 @@ sub start_event_loop($$) {
                 }
             }
 
-            if ($drop_counter >= 10) {
+            if ($drop_counter >= 10 and defined $wolf_client) {
                 $drop_counter = 0;
                 my $client_address = $wolf_client->peerhost();
                 LOGINF("Verbindung zu $client_address abgebrochen.");
@@ -465,6 +465,7 @@ sub start_event_loop($$) {
                 # Close the client connection after every command. The commands are short enough
                 # to be read in one go.
                 shutdown($command_client, 1);
+                $command_client->close();
                 $command_client = undef;
             }
         }
@@ -506,10 +507,10 @@ sub read_command_messages($$) {
         }
    }
 }
- 
+
 sub read_wolf_messages($) {
    my $client_socket = $_[0];
- 
+
    # read up to 4096 characters from the connected client
    my $rec_data = "";
 
@@ -552,7 +553,7 @@ sub create_answer($)
 #Erzeugt ein SetDatapointValue.Res Telegramm das an das ISM8i zurückgeschickt wird.
 {
    my @h = unpack("H2" x length($_[0]), $_[0]);
-   
+
    if (length($_[0]) < 14)
       {
 	   return "";
@@ -586,7 +587,7 @@ sub log_msg_data($$)
    my ($msg,$format) = @_;
    my $filename = $lbplogdir."/wolf_data.log";
    open(my $fh, '>>:encoding(UTF-8)', $filename) or die "Could not open file '$filename' $!";
-   
+
    if ($format eq 'fhem') {
       print $fh getLoggingTime()." $msg\n";
    } elsif ($format eq 'csv') {
@@ -594,7 +595,7 @@ sub log_msg_data($$)
    } elsif ($format eq 'data') {
       print $fh getLoggingTime().";$msg\n";
    }
-   
+
    close $fh;
 }
 
@@ -670,14 +671,14 @@ sub decodeTelegram($)
 {
    my $TelegrammLength = length($_[0]);
    my @h = unpack("H2" x $TelegrammLength, $_[0]);
-   
+
    my $hex_result = join(" ", @h);
    LOGDEB("ISM8 Daten: $hex_result");
- 
+
    my $FrameSize = hex($h[4].$h[5]);
    my $MainService = hex($h[10]);
    my $SubService = hex($h[11]);
-   
+
    if ($FrameSize != $TelegrammLength) {
         LOGERR("*** ERROR: TelegrammLength/FrameSize missmatch. [".$FrameSize."/".$TelegrammLength."] ***");
    } elsif ($SubService != 0x06) {
@@ -686,7 +687,7 @@ sub decodeTelegram($)
       my $StartDatapoint = hex($h[12].$h[13]);
       my $NumberOfDatapoints = hex($h[14].$h[15]);
 	  my $Position = 0;
-	  
+
 	  for (my $n=1; $n <= $NumberOfDatapoints; $n++) {
          my $DP_ID = hex($h[$Position + 16].$h[$Position + 17]);
          my $DP_command = hex($h[$Position + 18]);
@@ -698,14 +699,14 @@ sub decodeTelegram($)
 	     my $auswertung =  getLoggingTime.";".getCsvResult($DP_ID, $DP_value);
 		 if ($auswertung ne $last_auswertung) {
 			$last_auswertung = $auswertung;
-			 
+
 			my @fields = split(/;/, $auswertung); # [0]=Timestamp, [1]=DP ID, [2]=Geraet, [3]=Datenpunkt, [4]=Wert, optional [5]=Einheit
 
                         if ($fields[2] =~ /^ERR/ or $fields[3] =~ /^ERR/) {
                             LOGDEB("No Datapoint found for ID: $fields[1]. Ignoring");
                             goto err;
                         }
-			 
+
 			if ($hash{output} eq 'fhem') {
 			   ## Auswertung für FHEM erstellen ##
                            $send_msg = getFhemFriendly($fields[2]).".".$fields[1].".".getFhemFriendly($fields[3]); # Geraet - DP ID - Datenpunkt
@@ -765,17 +766,17 @@ sub decodeTelegram($)
 
                              publish_MQTT($DP_ID, $topic, $value);
                         }
-			
+
 			## Wenn aktiviert, Auswertung in ein File schreiben ##
 			if ($hash{dplog} eq '1') { log_msg_data($send_msg,$hash{output}); }
-			 
+
 			## Wolf ISMi basierte Werte alle 60 Minuten schicken ##
-			if (time >= $fw_actualize and $hash{output} eq 'fhem') { 
+			if (time >= $fw_actualize and $hash{output} eq 'fhem') {
 			   send_IGMPmessage("ISM8i.997.IP $hash{ism8i_ip}");
 			   send_IGMPmessage("ISM8i.998.Port $hash{port}");
 			   send_IGMPmessage("ISM8i.999.Firmware $hash{fw}");
 			   $fw_actualize = time + 3600;
-			}	
+			}
                     err:
 		 }
 		 $Position += 4 + $DP_length;
@@ -786,7 +787,7 @@ sub decodeTelegram($)
 
 sub loadConfig
 #Config Datei laden und Werte zwischenspeichern. Wenn keine Config Datei vorhanden ist wird eine angelegt.
-#Wenn die Werte in der Config nicht den Vorgaben entsprechen, dann werden die Standardwerte genommen. 
+#Wenn die Werte in der Config nicht den Vorgaben entsprechen, dann werden die Standardwerte genommen.
 #
 #Bedeutung der Einträge der Config:
 #   ism8i_port = Port auf dem das Modul auf den TCP Trafic des Wolf ISM8i Schnittstellenmoduls hört.
@@ -796,9 +797,9 @@ sub loadConfig
 #   input_port = Port auf dem das Modul auf den TCP Trafic des Loxone Miniservers hört.
 #                Default ist 12005.
 #   fw_version = Die Firmware Version des Wolf ISM8i Schnittstellenmoduls. Diese steht im Webinterface des Schnittstellenmoduls.
-#                Möglich sind 1.4 oder 1.5.
-#                Default ist 1.5.
-#   multicast_ip = die IPv4 Adresse der Multicast Gruppe an der die die entschlüsselten Datagramme geschickt werden. Default ist 
+#                Möglich sind 1.4, 1.5, 1.7, 1.8 oder 1.9.
+#                Default ist 1.8.
+#   multicast_ip = die IPv4 Adresse der Multicast Gruppe an der die die entschlüsselten Datagramme geschickt werden. Default ist
 #                  Bitte beim Ändern auf die Vorgaben für Multicast Adressen achten!
 #                  Default ist 239.7.7.77.
 #   multicast_port = Der Port der Multicast Gruppe. Möglich von 1 bis 65535.
@@ -807,8 +808,8 @@ sub loadConfig
 #            Wenn geloggt wird bitte in regelmäßigen Abständen die Größe des Logfiles prüfen und ggf. löschen, dader Log schnell sehr groß werden kann.
 #            Möglich sind 0 oder 1.
 #            Default ist 0.
-#   output = Das Format in welchem die Datenpunkte an die Multicast Gruppe oder an das Datenpunkte-Log gesickt wird. 
-#            Möglich ist 'csv' für das CSV Format (mit Semikolon (;) separiert) z.B. zum Importieren in Tabekkenkalkulationen. 
+#   output = Das Format in welchem die Datenpunkte an die Multicast Gruppe oder an das Datenpunkte-Log gesickt wird.
+#            Möglich ist 'csv' für das CSV Format (mit Semikolon (;) separiert) z.B. zum Importieren in Tabekkenkalkulationen.
 #            Möglich ist 'fhem' als Spezialformat für das ISM8I Modul.
 #            Default ist 'fhem'.
 #
@@ -825,7 +826,7 @@ sub loadConfig
 		   my @fields = split(/ /, l_r_dbl_trim($line));
 	       if (scalar(@fields) == 2) {
               LOGINF("      $fields[0] -> $fields[1]");
-	          if ($fields[0] eq "ism8i_port") { 
+	          if ($fields[0] eq "ism8i_port") {
 		         if ($fields[1] =~ m/^([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$/ and $fields[1] > 0 and $fields[1] <= 65535) {
 			        $hash{port} = $fields[1]; } else { $hash{port} = '12004'; }
                       } elsif ($fields[0] eq "input_port") {
@@ -845,7 +846,7 @@ sub loadConfig
 		            $hash{dplog} = $fields[1]; } else { $hash{dplog} = '0'; }
 		      } elsif ($fields[0] eq "output") {
                          if ($fields[1] =~ m/^(csv|fhem|data|none)$/) {
-		            $hash{output} = $fields[1]; } else { $hash{dplog} = 'fhem'; }
+		            $hash{output} = $fields[1]; } else { $hash{output} = 'fhem'; }
                       } elsif ($fields[0] eq "mqtt") {
                          if ($fields[1] =~ m/^(1|0)$/) {
                             $hash{mqtt} = $fields[1]; } else { $hash{mqtt} = '0'; }
@@ -856,14 +857,14 @@ sub loadConfig
                       if ($fields[1] =~ m/^([0-9]*|-1)$/) {
                          $hash{online_timeout} = $fields[1]; } else { $hash{online_timeout} = '-1'; }
 	          }
-		   }	  
+		   }
 	    }
       }
 	  close $data;
    } else {
      LOGINF("   Config file not found, creating new config file.");
      open(my $fh, '>:encoding(UTF-8)', $file) or die "Could not open/write file '$file' $!";
-	  
+
      print $fh "######################################################################################################################################################\n";
      print $fh "#Config Datei laden und Werte zwischenspeichern. Wenn keine Config Datei vorhanden ist wird eine angelegt.\n";
      print $fh "#Wenn die Werte in der Config nicht den Vorgaben entsprechen, dann werden die Standardwerte genommen.\n";
@@ -877,7 +878,7 @@ sub loadConfig
      print $fh "#   input_port = Port auf dem das Modul auf den TCP Trafic des Loxone Miniservers hört.\n";
      print $fh "#                Default ist 12005.\n";
      print $fh "#   fw_version = Die Firmware Version des Wolf ISM8i Schnittstellenmoduls. Diese steht im Webinterface des Schnittstellenmoduls.\n";
-     print $fh "#                Möglich sind: 1.4 1.5 1.7 1.8\n";
+     print $fh "#                Möglich sind: 1.4 1.5 1.7 1.8 1.9\n";
      print $fh "#                Default ist 1.8\n";
      print $fh "#   multicast_ip = die IPv4 Adresse der Multicast Gruppe an der die die entschlüsselten Datagramme geschickt werden. Default ist\n";
      print $fh "#                  Bitte beim Ändern auf die Vorgaben für Multicast Adressen achten!\n";
@@ -896,7 +897,7 @@ sub loadConfig
      print $fh "#                    -1 deaktiviert den periodischen online check.\n";
      print $fh "#                    Default is -1.;\n";
      print $fh "######################################################################################################################################################\n\n";
-	 
+
 	 print $fh "ism8i_port $hash{port}\n";
          print $fh "input_port $hash{inport}\n";
 	 print $fh "fw_version $hash{fw}\n";
@@ -920,7 +921,7 @@ sub loadDatenpunkte
 {
    #erstmal vorsichtshalber datenpunkte array löschen:
    while(@datenpunkte) { shift(@datenpunkte); }
-   
+
    my $fw_version = $hash{fw};
    $fw_version =~ s/\.//g;
    my $file = $script_path."/wolf_datenpunkte_".$fw_version.".csv";
@@ -970,7 +971,7 @@ sub getDatenpunkt($$)
 #$1 = DP ID , $2 = Index des Feldes (0 = DP ID, 1 = Gerät, 2 = Datenpunkt, 3 = KNX-Datenpunkttyp, 4 = Output/Input, 5 = Einheit)
 {
    my $d = $datenpunkte[$_[0]][$_[1]];
-   if ( (defined $d) and (length($d)>0) ) { return $d; } else { return "ERR:NotFound"; } 
+   if ( (defined $d) and (length($d)>0) ) { return $d; } else { return "ERR:NotFound"; }
 }
 
 
@@ -986,28 +987,28 @@ sub getCsvResult($$)
    my $datatype = getDatenpunkt($dp_id, 3);
    my $result = $dp_id.";".$geraet.";".$ereignis.";";
    my $v = "ERR:NoResult";
-   
-   if ($datatype eq "DPT_Switch") 
+
+   if ($datatype eq "DPT_Switch")
      {
 	  if ($dp_val == 0) {$v = "Aus";} elsif ($dp_val == 1) {$v = "An";}
 	  $result .= $v;
 	 }
-   elsif ($datatype eq "DPT_Bool") 
+   elsif ($datatype eq "DPT_Bool")
      {
 	  if ($dp_val == 0) {$v = "Falsch";} elsif ($dp_val == 1) {$v = "Wahr";}
 	  $result .= $v;
 	 }
-   elsif ($datatype eq "DPT_Enable") 
+   elsif ($datatype eq "DPT_Enable")
      {
 	  if ($dp_val == 0) {$v = "Deaktiviert";} elsif ($dp_val == 1) {$v = "Aktiviert";}
 	  $result .= $v;
 	 }
-   elsif ($datatype eq "DPT_OpenClose") 
+   elsif ($datatype eq "DPT_OpenClose")
      {
 	  if ($dp_val == 0) {$v = "Offen";} elsif ($dp_val == 1) {$v = "Geschlossen";}
 	  $result .= $v;
 	 }
-   elsif ($datatype eq "DPT_Scaling") 
+   elsif ($datatype eq "DPT_Scaling")
      {
           $result .= round(($dp_val & 0xff) * 100 / 255).";%";
 	 }
@@ -1019,63 +1020,63 @@ sub getCsvResult($$)
      {
           $result .= $dp_val;
          }
-   elsif ($datatype eq "DPT_Value_Temp") 
+   elsif ($datatype eq "DPT_Value_Temp")
      {
 	  $result .= pdt_knx_float($dp_val).";°C";
 	 }
-   elsif ($datatype eq "DPT_Value_Tempd") 
+   elsif ($datatype eq "DPT_Value_Tempd")
      {
 	  $result .= pdt_knx_float($dp_val).";K";
 	 }
-   elsif ($datatype eq "DPT_Value_Pres") 
+   elsif ($datatype eq "DPT_Value_Pres")
      {
 	  $result .= pdt_knx_float($dp_val).";Pa";
 	 }
-   elsif ($datatype eq "DPT_Power") 
+   elsif ($datatype eq "DPT_Power")
      {
 	  $result .= pdt_knx_float($dp_val).";kW";
 	 }
-   elsif ($datatype eq "DPT_Value_Volume_Flow") 
+   elsif ($datatype eq "DPT_Value_Volume_Flow")
      {
 	  $result .= pdt_knx_float($dp_val).";l/h";
 	 }
-   elsif ($datatype eq "DPT_TimeOfDay") 
+   elsif ($datatype eq "DPT_TimeOfDay")
      {
 	  $result .= pdt_time($dp_val);
 	 }
-   elsif ($datatype eq "DPT_Date") 
+   elsif ($datatype eq "DPT_Date")
      {
 	  $result .= pdt_date($dp_val);
 	 }
-   elsif ($datatype eq "DPT_FlowRate_m3/h") 
+   elsif ($datatype eq "DPT_FlowRate_m3/h")
      {
 	  $result .= (pdt_long($dp_val) * 0.0001).";m³/h";
 	 }
-   elsif ($datatype eq "DPT_ActiveEnergy") 
+   elsif ($datatype eq "DPT_ActiveEnergy")
      {
 	  $result .= pdt_long($dp_val).";Wh";
 	 }
-   elsif ($datatype eq "DPT_ActiveEnergy_kWh") 
+   elsif ($datatype eq "DPT_ActiveEnergy_kWh")
      {
 	  $result .= pdt_long($dp_val).";kWh";
 	 }
-   elsif ($datatype eq "DPT_HVACMode") 
+   elsif ($datatype eq "DPT_HVACMode")
      {
           my @Heizkreis = ("Automatikbetrieb","Heizbetrieb","Standby","Sparbetrieb","-");
 	  my @CWL = ("Automatikbetrieb","Nennlüftung","-","Reduzierung Lüftung","-");
-          if ($hash{fw} eq '1.8') {
+          if ($hash{fw} eq '1.8' or $hash{fw} eq '1.9') {
             @Heizkreis = ("Automatikbetrieb","Heizbetrieb","Standby","Sparbetrieb","Permanent Kühlen");
             @CWL = ("Automatikbetrieb","Nennlüftung","-","Reduzierung Lüftung","Feuchteschutz");
           }
-	 
+
       if ($geraet =~ /Heizkreis/ or $geraet =~ /Mischerkreis/)
 	   	{ $v = $Heizkreis[$dp_val]; }
 	  elsif ($geraet =~ /CWL/)
 	   	{ $v = $CWL[$dp_val]; }
-      
+
 	  if (defined $v) { $result .= $v; } else { $result .= "ERR:NoResult[".$dp_id."/".$dp_val."]";}
 	 }
-   elsif ($datatype eq "DPT_DHWMode") 
+   elsif ($datatype eq "DPT_DHWMode")
      {
 	  my @Warmwasser = ("Automatikbetrieb","-","Dauerbetrieb","-","Standby");
 
@@ -1083,15 +1084,15 @@ sub getCsvResult($$)
 
 	  if (defined $v) { $result .= $v; } else { $result .= "ERR:NoResult[".$dp_id."/".$dp_val."]";}
 	 }
-   elsif ($datatype eq "DPT_HVACContrMode") 
+   elsif ($datatype eq "DPT_HVACContrMode")
      {
           my @CGB2_MGK2_TOB = ("Schornsteinferger","Heiz- Warmwasserbetrieb","-","-","-","-","Standby","GLT","-","-","-","Frostschutz","-","-","-","Kalibration");
 
           my @BWL1S = ("Antilegionellenfunktion","Heiz- Warmwasserbetrieb","Vorwärmung","Aktive Kühlung","-","-","Standby","GLT","-","-","-","Frostschutz","-","-","-","-");
-				   
+
           if ($geraet =~ /CGB-2/ or $geraet =~ /MGK-2/ or $geraet =~ /TOB/ or $geraet =~ /COB-2/ or $geraet =~ /TGB/)
 	    { $v = $CGB2_MGK2_TOB[$dp_val]; }
-	  elsif ($geraet =~ /BWL-1-S/)
+	  elsif ($geraet =~ /BWL-1-S/ or $geraet =~ /CHA/ or $geraet =~ /Wärmepumpe/)
 	   	{ $v = $BWL1S[$dp_val]; }
 
 	  if (defined $v) { $result .= $v; } else { $result .= "ERR:NoResult[".$dp_id."/".$dp_val."]";}
@@ -1101,7 +1102,7 @@ sub getCsvResult($$)
 	  $result .= "ERR:TypeNotFound[".$datatype."]";
 	 }
 
-   return $result;   
+   return $result;
 }
 
 # "<ID> <VALUE>"
@@ -1209,12 +1210,12 @@ sub parseInput($)
 
 sub pdt_knx_float($)
 {
-# Format: 
+# Format:
 #   2 octets: F16
 #   octet nr: 2MSB 1LSB
 #   field names: FloatValue
 #   encoding: MEEEEMMMMMMMMMMM
-# Encoding: 
+# Encoding:
 #   Float Value = (0,01*M)*2**(E)
 #   E = [0...15]
 #   M = [-2048...2047], two‘s complement notation
@@ -1298,7 +1299,7 @@ sub pdt_time($)
    my $hour = $b1 & 0x1f;
    my $min = $b2 & 0x3f;
    my $sec = $b3 & 0x3f;
-   return sprintf("%s%02d:%02d:%02d", $weekdays[$weekday], $hour, $min, $sec);
+   return sprintf("%s%02d:%02d:%02d", $day_str, $hour, $min, $sec);
 }
 
 sub to_pdt_time($)

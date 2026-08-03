@@ -1,4 +1,4 @@
-﻿#Datenpunkte Wolf ISM8i für Firmware 1.7
+#Datenpunkte Wolf ISM8i für Firmware 1.7
 #
 1;Heizgerät 1 (TOB,CGB-2,MGK-2,COB-2,TGB-2);Störung;DPT_Switch;Out/-;-
 2;Heizgerät 1 (TOB,CGB-2,MGK-2,COB-2,TGB-2);Betriebsart;DPT_HVACContrMode;Out/-;-
