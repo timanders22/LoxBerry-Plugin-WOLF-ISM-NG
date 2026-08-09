@@ -1,4 +1,7 @@
+# Nichts davon gehoert ins Plugin-Archiv: Projektdateien einer
+# Entwicklungsumgebung, Ablagen von macOS und Reste des Editors.
 *.pro
 *.pro.user
 .DS_Store
+*.swp
 .swp

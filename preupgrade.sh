@@ -46,10 +46,35 @@ PCONFIG=$LBPCONFIG/$PDIR
 PSBIN=$LBPSBIN/$PDIR
 PBIN=$LBPBIN/$PDIR
 
-echo "<INFO> Creating temporary folders for upgrading /tmp/${PDIR}.SAVE "
-mkdir /tmp/${PDIR}.SAVE
+# ---------------------------------------------------------------------------
+# WOHIN GESICHERT WIRD
+#
+# Bis 2.5.1 nach /tmp/<ordner>.SAVE. Berechtigt ist der Einwand, dass /tmp
+# auf dem LoxBerry fluechtig ist: bricht das Upgrade ab oder startet das
+# Geraet dazwischen neu, ist die Sicherung fort.
+#
+# Nicht berechtigt ist der uebliche Zusatz, man solle statt dessen "$1"
+# nehmen, das sei der vom Installer bereitgestellte Ordner. Der Installer
+# ruft dieses Skript so auf (sbin/plugininstall.pl):
+#   cd "$tempfolder" && "$script" "$tempfile" "$pname" "$pfolder" \
+#                       "$pversion" "$lbhomedir" "$tempfolder"
+# $1 ist $tempfile - eine Zufallskennung aus zehn Zeichen (&generate(10)),
+# KEIN Pfad. Der absolute Arbeitsordner kommt als SECHSTES Argument; dieses
+# Skript liest ihn oben bereits als $PTEMPPATH ein. Er liegt unter
+# data/system/tmp und wird vom Installer selbst aufgeraeumt - erst NACH
+# postupgrade.
+# ---------------------------------------------------------------------------
+if [ -n "$PTEMPPATH" ] && [ -d "$PTEMPPATH" ]; then
+    SICHERUNG="$PTEMPPATH/wolf_ng_upgrade"
+else
+    echo "<INFO> Kein Arbeitsordner uebergeben - Rueckfall auf /tmp"
+    SICHERUNG="/tmp/${PDIR}.SAVE"
+fi
+mkdir -p "$SICHERUNG"
+# Den benutzten Ort hinterlegen, damit postupgrade.sh ihn nicht raten muss.
+echo "$SICHERUNG" > "$PCONFIG/.upgrade_pfad" 2>/dev/null
 
-echo "<INFO> Backing up existing config files $PCONFIG/* /tmp/${PDIR}.SAVE/ "
-cp -v -r $PCONFIG/* /tmp/${PDIR}.SAVE/
+echo "<INFO> Backing up existing config files $PCONFIG/* -> $SICHERUNG/"
+cp -p -r "$PCONFIG/." "$SICHERUNG/" 2>/dev/null || true
 
 exit 0

@@ -1,0 +1,74 @@
+#!/bin/bash
+# Wolf ISM8 - uninstall
+# command <TEMPFOLDER> <NAME> <FOLDER> <VERSION> <BASEFOLDER>
+#
+# Wird von LoxBerry als root ausgefuehrt. Rueckgabewert 0 = in Ordnung,
+# 1 = Warnung (die Deinstallation laeuft trotzdem weiter).
+#
+# ===================================================================
+# WARUM ES DIESE DATEI GIBT
+# ===================================================================
+#
+# LoxBerry raeumt die Plugin-Ordner weg. Der Wolf-Server bleibt aber
+# laufen: der Watchdog wird beim Hochfahren mit "&" gestartet und haengt
+# an keinem Elternprozess, den LoxBerry beenden wuerde. Ohne dieses
+# Skript liefe er bis zum naechsten Neustart weiter, wuerde das
+# Auswertungsmodul bei jedem Absturz neu starten und weiter auf dem
+# ISM8-Port lauschen - obwohl das Plugin gar nicht mehr da ist.
+#
+# ZUR PROZESSSUCHE - bitte nicht auf pkill zurueckbauen:
+# "pkill -f wolf_ism8i.pl" durchsucht die ganze Befehlszeile und traefe
+# auch einen Editor mit offener Datei oder ein zweites Exemplar des
+# Plugins. "ps -C" und "killall" vergleichen den comm-Namen, der bei
+# einem Skript mit Shebang "bash" bzw. "perl" lautet - die finden gar
+# nichts. Der Watchdog startet das Auswertungsmodul ausserdem als
+# "perl -X <pfad>", der Pfad steht dort erst an dritter Stelle.
+
+PDIR=$3
+[ -n "$PDIR" ] || PDIR="wolf_ng"
+BASE="${5:-$LBHOMEDIR}"
+[ -n "$BASE" ] && [ -d "$BASE" ] || BASE="/opt/loxberry"
+
+BINPATH="$BASE/bin/plugins/$PDIR"
+
+wolf_beenden() {
+    SKRIPT="$1"
+    N=0
+    for D in /proc/[0-9]*; do
+        P=$(basename "$D")
+        [ -r "$D/cmdline" ] || continue
+        ARGS=$(tr '\0' '\n' < "$D/cmdline" 2>/dev/null)
+        ERSTES=$(printf '%s\n' "$ARGS" | head -1)
+        TREFFER=0
+        if [ "$ERSTES" = "$SKRIPT" ]; then
+            TREFFER=1
+        else
+            case "$(basename "$ERSTES")" in
+                perl|bash|sh|dash)
+                    printf '%s\n' "$ARGS" | grep -qxF "$SKRIPT" && TREFFER=1 ;;
+            esac
+        fi
+        if [ "$TREFFER" -eq 1 ]; then
+            kill "$P" 2>/dev/null
+            for i in 1 2 3 4 5; do
+                kill -0 "$P" 2>/dev/null || break
+                sleep 1
+            done
+            kill -9 "$P" 2>/dev/null
+            N=$((N+1))
+            echo "<OK> Beendet: $(basename "$SKRIPT") (PID $P)"
+        fi
+    done
+    return 0
+}
+
+# Erst den Watchdog, sonst startet er das Auswertungsmodul sofort neu.
+wolf_beenden "$BINPATH/wolf_watchdog.sh"
+sleep 1
+wolf_beenden "$BINPATH/wolf_ism8i.pl"
+
+echo "<INFO> Der ISM8-Port ist damit wieder frei."
+echo "<INFO> Im MQTT-Broker koennen Werte stehen bleiben, wenn das Plugin mit"
+echo "<INFO> gesetztem Retain-Merker gesendet hat. Zum Aufraeumen:"
+echo "<INFO> LoxBerry -> System -> MQTT Gateway."
+exit 0

@@ -4,7 +4,6 @@ use strict;
 use warnings;
 use utf8;
 
- #!/usr/bin/perl
  # client
 
 use IO::Socket::Multicast;

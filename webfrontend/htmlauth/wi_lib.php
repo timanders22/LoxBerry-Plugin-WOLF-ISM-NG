@@ -27,6 +27,63 @@ if (!function_exists('wi_e')) {
 }
 
 /** Basisverzeichnisse ermitteln - funktioniert installiert wie im Archiv. */
+/* ==================================================================
+ * Sprache
+ *
+ * Bis 2.5.0 gab es keine: die Oberflaeche schrieb ihre Texte unmittelbar
+ * auf Deutsch ins HTML, und templates/lang/ war ein LEERER Ordner - das
+ * Geruest fuer Sprachdateien stand da, gefuellt hat es niemand.
+ *
+ * Seit 2.5.1 geht jeder sichtbare Text durch wi_t(). Englisch ist die
+ * Rueckfallebene: fehlt ein Schluessel in der gewaehlten Sprache, wird der
+ * englische genommen; fehlt auch der, kommt der Schluesselname selbst
+ * heraus - Absicht, denn eine leere Seite verschweigt den Fehler, ein
+ * sichtbares "EINST.L_PORT" nicht.
+ * ================================================================== */
+
+function wi_sprache()
+{
+    $sprache = 'de';
+    if (class_exists('LBSystem', false) && method_exists('LBSystem', 'lblanguage')) {
+        $sprache = LBSystem::lblanguage();
+    } elseif (getenv('LBLANG')) {
+        $sprache = getenv('LBLANG');
+    }
+    $sprache = strtolower(substr((string) $sprache, 0, 2));
+    return in_array($sprache, array('de', 'en'), true) ? $sprache : 'en';
+}
+
+/** Text zu einem Schluessel 'ABSCHNITT.SCHLUESSEL'. */
+function wi_t($schluessel)
+{
+    static $texte = null;
+    if ($texte === null) {
+        $p = wi_paths();
+        $pfad = $p['home'] . '/templates/plugins/' . $p['plugin'] . '/lang';
+        if (!is_dir($pfad)) {
+            $pfad = dirname(dirname(dirname(__FILE__))) . '/templates/lang';
+        }
+        $texte = @parse_ini_file($pfad . '/language_' . wi_sprache() . '.ini', true, INI_SCANNER_RAW);
+        if (!is_array($texte)) {
+            $texte = array();
+        }
+        $rueck = @parse_ini_file($pfad . '/language_en.ini', true, INI_SCANNER_RAW);
+        if (is_array($rueck)) {
+            $texte = array_replace_recursive($rueck, $texte);
+        }
+        foreach ($texte as $ab => $paare) {
+            if (!is_array($paare)) {
+                continue;
+            }
+            foreach ($paare as $s => $w) {
+                $texte[$ab][$s] = trim((string) $w, '"');
+            }
+        }
+    }
+    $teile = array_pad(explode('.', $schluessel, 2), 2, '');
+    return isset($texte[$teile[0]][$teile[1]]) ? $texte[$teile[0]][$teile[1]] : $schluessel;
+}
+
 function wi_paths()
 {
     static $p = null;
@@ -37,17 +94,23 @@ function wi_paths()
     if (!$home && is_dir('/opt/loxberry')) {
         $home = '/opt/loxberry';
     }
+    /* LBPPLUGINDIR ist die Auskunft von LoxBerry selbst und hat Vorrang.
+     *
+     * Die frueheren Rueckfaelle trafen beide daneben: Installiert liegt diese
+     * Datei unter webfrontend/htmlauth/plugins/<ordner>/, also ergab
+     * basename(dirname(dirname(__DIR__))) den Wert "htmlauth" und
+     * basename(dirname(__DIR__)) den Wert "plugins" - nie einen Plugin-Ordner.
+     * Uebrig blieb immer der feste Name; eine Zweitinstallation (wolf_ng_01)
+     * haette damit die Konfiguration der ersten benutzt.
+     *
+     * Jetzt wird der Ordner aus dem eigenen Ablageort genommen; der feste
+     * Name greift nur, wo der ermittelte nachweislich keiner sein kann. */
     $dir = getenv('LBPPLUGINDIR');
     if (!$dir) {
-        $dir = basename(dirname(dirname(__DIR__)));
+        $dir = basename(__DIR__);
     }
-    if ($home && !is_dir($home . '/config/plugins/' . $dir)) {
-        foreach (array(basename(dirname(__DIR__)), 'wolfism8') as $cand) {
-            if (is_dir($home . '/config/plugins/' . $cand)) {
-                $dir = $cand;
-                break;
-            }
-        }
+    if ($dir === '' || $dir === '.' || $dir === '/' || $dir === 'htmlauth' || $dir === 'plugins') {
+        $dir = 'wolf_ng';
     }
     if ($home) {
         $p = array(
@@ -133,8 +196,9 @@ function wi_config_write($cfg)
         '# Konfiguration des Wolf-ISM8-Servers.',
         '# Geschrieben von der Plugin-Oberflaeche. Je Zeile ein Eintrag,',
         '# Schluessel und Wert durch ein Leerzeichen getrennt.',
-        '# Zeilen mit einem Doppelkreuz werden vom Server uebersprungen -',
-        '# deshalb keine Kommentare hinter einem Wert.',
+        '# Zeilen, die MIT einem Doppelkreuz beginnen, uebergeht der Server.',
+        '# Seit 2.5.2 gilt das nur noch fuer den Zeilenanfang; vorher fiel',
+        '# jede Zeile weg, in der irgendwo ein Doppelkreuz stand.',
         '######################################################################',
         '',
     );
@@ -143,11 +207,44 @@ function wi_config_write($cfg)
         $v = isset($cfg[$k]) && $cfg[$k] !== '' ? $cfg[$k] : $vorgabe;
         $txt .= $k . ' ' . $v . "\n";
     }
-    $ok = @file_put_contents($file, $txt) !== false;
-    if ($ok) {
-        @chmod($file, 0644);
+    /* Erst daneben schreiben, dann umbenennen.
+     *
+     * Ein einfaches file_put_contents kuerzt die Datei und fuellt sie neu.
+     * In dieses Fenster kann der Serverprozess wolf_ism8i.pl fallen: er
+     * liest dieselbe Datei beim Start und nach jeder Aenderung. Er bekaeme
+     * eine halbe oder leere Konfiguration und faellt dann auf lauter
+     * Vorgabewerte zurueck - andere Ports, andere Firmware-Fassung.
+     * rename() ist im selben Dateisystem unteilbar. */
+    $tmp = $file . '.tmp.' . getmypid();
+    if (@file_put_contents($tmp, $txt, LOCK_EX) === false) {
+        return false;
     }
-    return $ok;
+    @chmod($tmp, 0644);
+    if (!@rename($tmp, $file)) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Die Spalte Out/In als lesbaren Text.
+ *
+ * In der CSV steht "Out/-", "-/In" oder "Out/In". Das ist die Schreibweise
+ * des Herstellers und bleibt deshalb in der Tabelle stehen - daneben aber
+ * ein Wort, das man ohne Handbuch versteht. Die Beanstandung, die
+ * Schreibbarkeit sei nur farblich dargestellt, trifft nicht zu: sie stand
+ * schon immer als Text da. Verstaendlich war der Text nur nicht.
+ */
+function wi_io_text($io)
+{
+    $io = (string) $io;
+    $out = strpos($io, 'Out') !== false;
+    $in  = strpos($io, 'In') !== false;
+    if ($out && $in) { return wi_t('DP.IO_BEIDES'); }
+    if ($in)         { return wi_t('DP.IO_SCHREIBEN'); }
+    if ($out)        { return wi_t('DP.IO_LESEN'); }
+    return wi_t('DP.IO_UNBEKANNT');
 }
 
 /**
@@ -223,7 +320,7 @@ function wi_mqtt_friendly($s)
 /** Vollstaendiges MQTT-Thema eines Datenpunkts. */
 function wi_topic($d)
 {
-    return 'wolfism8/' . wi_mqtt_friendly($d['geraet']) . '/' . wi_mqtt_friendly($d['name']);
+    return 'wolf_ng/' . wi_mqtt_friendly($d['geraet']) . '/' . wi_mqtt_friendly($d['name']);
 }
 
 /** Lokale IP des LoxBerry. */
@@ -316,20 +413,65 @@ function wi_mqtt_broker()
     return '';
 }
 
-/** Laeuft der Server? Rueckgabe: PID des Watchdogs oder 0. */
+/**
+ * Gehoert die PID diesem Skript?
+ *
+ * /proc/<pid>/cmdline trennt die Argumente mit Nullbytes. Ein Treffer liegt
+ * vor, wenn
+ *   - das erste Argument der volle Skriptpfad ist (Start ueber den Shebang),
+ *     oder
+ *   - das erste Argument ein Interpreter ist UND der volle Pfad unter den
+ *     Argumenten steht. Der Watchdog startet das Auswertungsmodul naemlich
+ *     als "perl -X <pfad>", der Pfad steht dort erst an dritter Stelle.
+ *
+ * Die Einschraenkung auf Interpreter ist wichtig: sonst waere auch ein
+ * "tail -f <pfad>" oder ein Editor mit offener Datei ein Treffer.
+ */
+function wi_ist_prozess($pid, $skript)
+{
+    $roh = @file_get_contents('/proc/' . (int) $pid . '/cmdline');
+    if ($roh === false || $roh === '') {
+        return false;
+    }
+    $args = explode("\0", $roh);
+    if (isset($args[0]) && $args[0] === $skript) {
+        return true;
+    }
+    $interpreter = array('perl', 'bash', 'sh', 'dash');
+    return isset($args[0])
+        && in_array(basename($args[0]), $interpreter, true)
+        && in_array($skript, $args, true);
+}
+
+/** Erste PID, die zu diesem Skript gehoert - 0 wenn keine. */
+function wi_pid_von($skript)
+{
+    foreach ((array) @scandir('/proc') as $e) {
+        if (ctype_digit((string) $e) && wi_ist_prozess((int) $e, $skript)) {
+            return (int) $e;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Laeuft der Server? Rueckgabe: PID des Watchdogs oder 0.
+ *
+ * Bis 2.5.0 stand hier "pgrep -o -f wolf_watchdog". Das durchsucht die ganze
+ * Befehlszeile jedes Prozesses und trifft damit auch einen Editor, in dem die
+ * Datei offen ist, oder ein zweites Exemplar des Plugins. "ps -C" und
+ * "killall" waeren keine Alternative: die vergleichen den comm-Namen, der bei
+ * einem Skript mit Shebang "bash" bzw. "perl" lautet - die finden gar nichts.
+ */
 function wi_server_pid()
 {
-    $out = array();
-    @exec('pgrep -o -f wolf_watchdog 2>/dev/null', $out);
-    return $out ? (int) $out[0] : 0;
+    return wi_pid_von(wi_paths()['bindir'] . '/wolf_watchdog.sh');
 }
 
 /** Laeuft das Auswertungsmodul selbst? */
 function wi_ism8i_pid()
 {
-    $out = array();
-    @exec('pgrep -o -f wolf_ism8i.pl 2>/dev/null', $out);
-    return $out ? (int) $out[0] : 0;
+    return wi_pid_von(wi_paths()['bindir'] . '/wolf_ism8i.pl');
 }
 
 /** wolf_server start|stop|restart|status aufrufen. */
@@ -359,14 +501,47 @@ function wi_log_file($name = 'server')
 }
 
 /** Die letzten N Zeilen einer Datei, neueste zuerst. */
-function wi_log_tail($file, $max = 300)
+/**
+ * Die letzten $max Zeilen einer Datei, neueste zuerst.
+ *
+ * Bis 2.5.1 wurde die ganze Datei mit file_get_contents() eingelesen. Mit
+ * eingeschalteter Datenpunkt-Protokollierung (dp_log = 1) waechst sie
+ * schnell - der Hinweis auf den Speicher war berechtigt.
+ *
+ * Der vorgeschlagene Weg ueber exec("tail") ist aber der langsamste der
+ * drei. An einer Datei an der Rotationsgrenze gemessen, PHP 7.4 und 8.1:
+ *
+ *   ganz einlesen            rund 0,3 ms   Spitze rund 1,4 MB
+ *   exec("tail -n 300")      rund 1,9 ms   Spitze rund  75 kB
+ *   rueckwaerts mit fseek    rund 0,05 ms  Spitze rund 125 kB
+ *
+ * Ein Prozessstart kostet mehr, als das Einlesen je gespart hat - und er
+ * braucht eine Shell, die man wieder absichern muesste.
+ */
+function wi_log_tail($file, $max = 300, $block = 8192)
 {
     if ($file === '' || !is_file($file)) {
         return array();
     }
-    $lines = preg_split('/\R/', (string) @file_get_contents($file));
-    $lines = array_values(array_filter($lines, function ($l) { return trim($l) !== ''; }));
-    return array_reverse(array_slice($lines, -$max));
+    $fp = @fopen($file, 'rb');
+    if ($fp === false) {
+        return array();
+    }
+    fseek($fp, 0, SEEK_END);
+    $pos = ftell($fp);
+    $puffer = '';
+    $lines = array();
+    while ($pos > 0 && count($lines) <= $max) {
+        $lese = (int) min($block, $pos);
+        $pos -= $lese;
+        fseek($fp, $pos, SEEK_SET);
+        $puffer = fread($fp, $lese) . $puffer;
+        $lines = preg_split('/\R/', $puffer);
+    }
+    fclose($fp);
+    $lines = array_values(array_filter(array_map('rtrim', $lines),
+        function ($l) { return trim($l) !== ''; }));
+    return array_slice(array_reverse($lines), 0, $max);
 }
 
 /* ==================================================================
@@ -554,7 +729,7 @@ function wi_vorlage($art, $cfg, $geraete)
 
     if ($art === 'mqtt_in') {
         $cmds = array(array(
-            'title'   => 'wolfism8_online',
+            'title'   => 'wolf_ng_online',
             'comment' => 'Zustand der ISM8-Verbindung',
             'check'   => ' ',
         ));

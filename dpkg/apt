@@ -1,5 +1,25 @@
 # These packages will be installed by apt-get -y install PACKAGENAME
 # One line per package, use exact packagename as you would do for apt-get.
 #
+# Bereits vorhandene Pakete ueberspringt apt, die Liste darf also
+# grosszuegig sein. Zu knapp ist sie dagegen teuer: fehlt ein Modul, das
+# ein Skript mit "use" laedt, startet das Skript nicht - und zwar wortlos,
+# lange nach der Installation.
+#
+# List::MoreUtils war bis 2.5.0 NICHT aufgefuehrt, obwohl wolf_ism8i.pl es
+# in Zeile 14 ohne eval laedt und first_index in Zeile 1315 wirklich
+# braucht. Auf einem LoxBerry, der es nicht ohnehin mitbrachte, ist der
+# Server nie angelaufen.
 libio-socket-multicast-perl
 libmath-round-perl
+liblist-moreutils-perl
+
+# Net::MQTT::Simple kommt ueblicherweise mit dem MQTT-Gateway-Plugin.
+# Seit 2.5.0 ist MQTT hier aber der voreingestellte Weg, also wird es
+# nicht mehr stillschweigend vorausgesetzt.
+libnet-mqtt-simple-perl
+
+# HTML::Entities steckt in libhtml-parser-perl. wolf_ism8i.pl laedt es in
+# Zeile 29 - aufgerufen wird derzeit nichts daraus, aber ein "use" ist ein
+# "use": fehlt das Paket, bricht das Skript beim Start ab.
+libhtml-parser-perl

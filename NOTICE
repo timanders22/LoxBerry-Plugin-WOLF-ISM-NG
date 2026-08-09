@@ -1,0 +1,69 @@
+WOLF ISM NG - Herkunft und Aenderungen
+======================================
+
+Die Rechtelage steht in LICENSE. Diese Datei sagt, was woher stammt.
+
+
+Kette der Werke
+---------------
+
+1. Dr. Mugur Dietrich, 2017
+   "Server Software zum Empfangen, Auswerten und Weitergeben von
+   Wolf ISM8i Datenpunkten"
+   http://tips-und-mehr.de, FHEM User Forum
+   -> bin/wolf_ism8i.pl, bin/wolf_server, die Datenpunkttabellen
+
+2. Dominik Holland (Gagi2k), LoxBerry-Plugin-WolfIsm8, Fassung 2.3.0 RC
+   https://github.com/Gagi2k/LoxBerry-Plugin-WolfIsm8
+   -> Einbettung als LoxBerry-Plugin
+
+3. Diese Fortfuehrung
+
+
+Wie viel stammt woertlich aus Dietrichs Werk
+--------------------------------------------
+
+Nachgemessen an bin/wolf_ism8i.pl, verglichen mit der Fassung aus dem
+Repository von Gagi2k: 677 von 729 unterschiedlichen Codezeilen sind
+woertlich uebernommen - rund 93 Prozent. Der Urhebervermerk im Dateikopf ist
+unveraendert geblieben und darf nicht entfernt werden.
+
+Die Datenpunkttabellen wolf_datenpunkte_14.csv und _15.csv sind unveraendert
+uebernommen; _17.csv und _18.csv sind ergaenzt, _19.csv ist neu.
+
+
+Aenderungen dieser Fortfuehrung
+-------------------------------
+
+Neu hinzugekommen: die Bedienoberflaeche unter webfrontend/htmlauth/
+(index.php, wi_lib.php, wi_test.php), templates/lang/language_de.ini und
+language_en.ini, templates/help/help.html, uninstall/uninstall, die Symbole
+unter icons/, LICENSE und diese Datei.
+
+Geaendert: bin/wolf_ism8i.pl (unter anderem Verzicht auf das Pragma bignum
+in der KNX-Float-Dekodierung - nachgemessen Faktor rund 1100 in der
+Laufzeit; Abfangen eines undefinierten Sockets, das vorher den ganzen Server
+beendete), bin/wolf_watchdog.sh, bin/wolf_server, die Installations- und
+Aktualisierungsskripte, config/wolf_ism8i.conf, dpkg/apt.
+
+  3.0.0  Eigener Name: "WOLF ISM NG", Ordner wolf_ng.
+
+         WARUM: Ordner und MQTT-Thema hiessen in dieser Abspaltung genauso
+         wie im Werk, aus dem sie hervorgegangen ist - "wolfism8". Wer beide
+         installiert hatte, bekam die Datenpunkte zweier Installationen unter
+         denselben Themen gemeldet.
+
+         WAS DAS BEDEUTET: LoxBerry bildet seine Kennung aus [AUTHOR] NAME,
+         EMAIL und [PLUGIN] NAME. Mit dem neuen Plugin-Namen ist das fuer
+         LoxBerry ein anderes Plugin - eine vorhandene Installation bekommt
+         dieses Update NICHT angeboten und muss einmal neu installiert
+         werden.
+
+         DIE MQTT-THEMEN WANDERN:
+
+             wolfism8/<Geraet>/<Datenpunkt>  ->  wolf_ng/<Geraet>/<Datenpunkt>
+             wolfism8/online                 ->  wolf_ng/online
+
+         Jeder virtuelle Eingang im Miniserver, der darauf hoert, muss
+         nachgezogen werden. An den Ports (12004, 12005, 35353) aendert sich
+         nichts.

@@ -1,43 +1,64 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  Wolf ISM8 - Plugin-Symbol nach Hausstandard.
-  Runde Scheibe in LoxBerry-Gruen #6dac20, Motiv weiss:
-  Flamme (Waermeerzeuger) mit aufsteigenden Funkwellen (Datenuebertragung).
-  Keine fremde Wortmarke, kein Herstellerlogo.
--->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<svg width="512" height="512" viewBox="0 0 512 512" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg-grad" cx="50%" cy="50%" r="50%" fx="35%" fy="35%">
+      <stop offset="0%" stop-color="#7dc424" />
+      <stop offset="65%" stop-color="#6dac20" />
+      <stop offset="100%" stop-color="#568819" />
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
 
-  <circle cx="256" cy="256" r="256" fill="#6dac20"/>
-  <circle cx="256" cy="256" r="232" fill="none" stroke="#ffffff" stroke-opacity="0.28" stroke-width="6"/>
+  <!-- Outer Badge Ring -->
+  <circle cx="256" cy="256" r="246" fill="url(#bg-grad)" />
+  <circle cx="256" cy="256" r="232" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="3" />
 
-  <!-- Flamme: aeussere Kontur -->
-  <path fill="#ffffff" d="
-    M 214 96
-    c 8 44 -14 66 -38 92
-    c -26 28 -42 58 -42 96
-    c 0 62 51 108 122 108
-    c 71 0 122 -46 122 -108
-    c 0 -44 -20 -74 -52 -104
-    c -8 34 -24 48 -38 52
-    c 10 -50 -12 -104 -74 -136
-    z"/>
+  <g filter="url(#shadow)" fill="#ffffff">
+    <!-- Main Center Icon: Wolf HVAC Main Appliance (Heizung / Lüftung Gehäuse) -->
+    <rect x="181" y="90" width="150" height="190" rx="16" fill="#ffffff" />
 
-  <!-- Flammenkern -->
-  <path fill="#6dac20" d="
-    M 244 226
-    c 6 30 -8 44 -22 60
-    c -14 16 -22 32 -22 52
-    c 0 32 24 54 56 54
-    c 32 0 56 -22 56 -54
-    c 0 -26 -14 -42 -34 -60
-    c -2 20 -12 28 -22 30
-    c 8 -30 -4 -60 -12 -82
-    z"/>
+    <!-- Top Display / Status Screen Cutout -->
+    <rect x="197" y="106" width="118" height="24" rx="5" fill="#6dac20" />
+    <circle cx="209" cy="118" r="3" fill="#ffffff" />
+    <circle cx="221" cy="118" r="3" fill="#ffffff" />
+    <rect x="265" y="115" width="38" height="6" rx="2" fill="#ffffff" />
 
-  <!-- Funkwellen: Daten verlassen das Geraet -->
-  <g fill="none" stroke="#ffffff" stroke-width="17" stroke-linecap="round">
-    <path d="M 350 168 a 54 54 0 0 1 0 76"/>
-    <path d="M 386 132 a 105 105 0 0 1 0 148"/>
-    <path d="M 422  96 a 156 156 0 0 1 0 220"/>
+    <!-- Dual Operation Cutouts: Flame (Heizung) & Fan (Lüftung) -->
+    <!-- Linker Ausschnitt: Flamme -->
+    <circle cx="225" cy="205" r="32" fill="#6dac20" />
+    <path d="M 225 185 C 233 197 241 205 233 218 C 229 224 221 224 217 218 C 211 210 217 201 225 185 Z" fill="#ffffff" />
+
+    <!-- Rechter Ausschnitt: Ventilator / Lüfter -->
+    <circle cx="287" cy="205" r="32" fill="#6dac20" />
+    <circle cx="287" cy="205" r="7" fill="#ffffff" />
+    <path d="M 287 198 C 283 184 291 178 287 176 C 283 178 283 190 287 198 Z" fill="#ffffff" />
+    <path d="M 287 212 C 291 226 283 232 287 234 C 291 232 291 220 287 212 Z" fill="#ffffff" />
+    <path d="M 280 205 C 266 201 260 209 258 205 C 260 201 272 201 280 205 Z" fill="#ffffff" />
+    <path d="M 294 205 C 308 209 314 201 316 205 C 314 209 302 209 294 205 Z" fill="#ffffff" />
+
+    <!-- Standfüße der Haustechnikeinheit -->
+    <rect x="196" y="280" width="28" height="10" rx="3" fill="#ffffff" />
+    <rect x="288" y="280" width="28" height="10" rx="3" fill="#ffffff" />
+
+    <!-- Flankierendes Symbol links: Heizungs-Flamme -->
+    <g transform="translate(108, 168)">
+      <circle cx="0" cy="0" r="22" fill="#ffffff" />
+      <path d="M 0 -12 C 6 -4 12 2 6 11 C 3 15 -3 15 -6 11 C -11 5 -6 -2 0 -12 Z" fill="#6dac20" />
+    </g>
+
+    <!-- Flankierendes Symbol rechts: Lüftung / Luftstrom-Wellen -->
+    <g transform="translate(404, 168)">
+      <circle cx="0" cy="0" r="22" fill="#ffffff" />
+      <path d="M -11 -6 Q 0 -12 11 -6 M -13 0 Q 0 -6 13 0 M -11 6 Q 0 0 11 6" fill="none" stroke="#6dac20" stroke-width="3" stroke-linecap="round" />
+    </g>
+
+    <!-- Dashed Line -->
+    <path d="M 150 345 L 362 345" stroke="#ffffff" stroke-width="4" stroke-dasharray="6 8" opacity="0.8" />
   </g>
+
+  <!-- Typography -->
+  <text x="256" y="388" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="900" font-size="29" letter-spacing="0.5">WOLF ISM</text>
+  <text x="256" y="424" text-anchor="middle" fill="#ffffff" font-family="Arial, sans-serif" font-weight="bold" font-size="20" letter-spacing="3">LOXBERRY</text>
 </svg>

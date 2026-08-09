@@ -1,0 +1,53 @@
+WOLF ISM NG - LoxBerry-Plugin
+=============================
+
+BITTE ZUERST LESEN
+------------------
+
+Dieses Plugin ist KEINE freie Software im Sinne der OSI. Der Kern -
+bin/wolf_ism8i.pl und bin/wolf_server - stammt von Dr. Mugur Dietrich und
+steht unter den Bedingungen, die er selbst in den Dateikopf geschrieben hat.
+Sie lauten woertlich:
+
+    Server Software zum Empangen, Auswerten und Weitergeben von
+    Wolf ISM8i Datenpunkten
+    Copyright (C) 2017 bei Dr Mugur Dietrich
+    Frei fuer den privaten und schulischen Einsatz
+    Kommerziellen Einsatz nur nach vorhergehender Genehmigung !
+    Support Seite: http://tips-und-mehr.de und das FHEM User Forum
+    Mailadresse: m.i.dietrich@gmx.de
+
+Was das bedeutet:
+
+  * Privater und schulischer Einsatz ist ausdruecklich erlaubt.
+  * KOMMERZIELLER EINSATZ IST NUR MIT SEINER VORHERIGEN GENEHMIGUNG
+    ZULAESSIG. Wer dieses Plugin gewerblich einsetzen will, wende sich an
+    die oben genannte Adresse.
+  * Zur Weitergabe an Dritte sagen die Bedingungen nichts. Sie erteilen also
+    auch keine ausdrueckliche Erlaubnis dazu. Wer diesen Quelltext weiter
+    verbreitet - etwa durch einen eigenen Fork -, tut das ohne eine
+    schriftliche Erlaubnis des Urhebers.
+
+Eine Lizenzdatei gab es weder im urspruenglichen Werk noch in der Abspaltung,
+aus der diese Fassung hervorgegangen ist. Diese Datei traegt die Bedingungen
+nach, damit sie nicht laenger nur im Dateikopf einer einzelnen Datei stehen.
+Sie erweitert oder beschraenkt sie nicht - das kann nur der Urheber.
+
+
+Die uebrigen Teile
+------------------
+
+Nicht von Dr. Dietrich stammen: die Bedienoberflaeche unter
+webfrontend/htmlauth/ (index.php, wi_lib.php, wi_test.php), die
+Sprachdateien, die Hilfeseite, bin/wolf_watchdog.sh in seiner heutigen Form,
+die Installations- und Deinstallationsskripte, die Symbole unter icons/ und
+diese Datei. Fuer sie gilt dasselbe wie oben, solange sie zusammen mit dem
+Kern ausgeliefert werden - getrennt davon stellen die Verfasser sie unter die
+MIT-Lizenz.
+
+
+Marken
+------
+WOLF und ISM8i sind Marken der WOLF GmbH. Dieses Plugin steht in keiner
+Verbindung zu diesem Unternehmen und wird von ihm weder herausgegeben noch
+unterstuetzt.

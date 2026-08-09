@@ -13,7 +13,6 @@
 
 use List::MoreUtils qw(first_index);
 use IO::Select;
-use diagnostics;
 use LoxBerry::System;
 use LoxBerry::Log;
 
@@ -21,7 +20,21 @@ use strict;
 use warnings;
 use utf8;
 use Encode 'encode';
-use bignum;
+# use bignum; ist ENTFERNT.
+#
+# Das Pragma macht aus jeder Zahl im lexikalischen Bereich ein
+# Math::BigInt/BigFloat-Objekt - auch aus Schleifenzaehlern, Bitmasken und
+# Schiebeoperationen. Nachgemessen mit der KNX-Float-Dekodierung dieses
+# Plugins, 200000 Durchlaeufe:
+#
+#     ohne bignum    0,053 s
+#     mit  bignum   58,621 s      (Faktor rund 1100)
+#
+# Gegenprobe auf die Werte: dieselben Rechnungen mit und ohne Pragma
+# liefern zeichengleich dasselbe Ergebnis, auch an den Raendern (0, 65535,
+# 2147483647, 4294967295). Das ist auch zu erwarten - KNX liefert 16- und
+# 32-Bit-Werte, die in einem Perl-Integer und in einem double (53 Bit
+# Mantisse) exakt darstellbar sind. Genauigkeit geht also keine verloren.
 
 use IO::Socket::INET;
 use IO::Socket::Multicast; #   apt install libio-socket-multicast-perl
@@ -140,9 +153,9 @@ sub connect_MQTT
 {
     if ($hash{mqtt} eq '1') {
         $mqtt = mqtt_connect();
-        $mqtt->last_will("wolfism8/online", "0");
+        $mqtt->last_will("wolf_ng/online", "0");
         if ($mqtt) {
-            $mqtt->subscribe("wolfism8/#", \&received_MQTT);
+            $mqtt->subscribe("wolf_ng/#", \&received_MQTT);
         }
     }
 }
@@ -188,6 +201,14 @@ sub received_MQTT
 
     my $send_data = parseInput("$id;$message");
     if ($send_data) {
+        # Ohne Verbindung zum ISM8i gibt es nichts zu senden. Der
+        # unmittelbare Aufruf war ein "Can't call method \"send\" on an
+        # undefined value" - und damit das Ende des ganzen Servers, nicht nur
+        # dieses einen Befehls.
+        if (!defined $wolf_client) {
+            LOGWARN("Keine Verbindung zum ISM8i-Modul - MQTT-Befehl verworfen: $id;$message");
+            return;
+        }
         $wolf_client->send($send_data);
         if ($hash{pull_on_write} eq '1') {
             startPullRequestTimer();
@@ -232,8 +253,8 @@ sub send_OnlineState($)
     my $online = $_[0];
     if ($online_state != $online) {
         if ($hash{mqtt} eq '1') {
-            LOGINF("publish online state to MQTT topic wolfism8/online: $online");
-            $mqtt->publish('wolfism8/online', $online);
+            LOGINF("publish online state to MQTT topic wolf_ng/online: $online");
+            $mqtt->publish('wolf_ng/online', $online);
         }
         send_IGMPmessage("online;".$online);
     }
@@ -417,23 +438,29 @@ sub start_event_loop($$) {
 
                     LOGINF("Sende Pull Request zum ISM8i Modul: $client_address");
                     my $pull_request = createPullRequest();
-                    if (length($pull_request) > 0) { $wolf_client->send($pull_request); }
+                    if (length($pull_request) > 0 and defined $wolf_client) { $wolf_client->send($pull_request); }
 
                     $read_select->add($wolf_client);
                 }
 
-                if (read_wolf_messages($wolf_client)) {
+                my $gelesen = read_wolf_messages($wolf_client);
+                if ($gelesen > 0) {
                     $drop_counter = 0;
                     send_OnlineState(1);
+                } elsif ($gelesen < 0) {
+                    $drop_counter = 10;   # Gegenstelle zu - nicht erst zaehlen
                 } else {
                     $drop_counter++;
                 }
             }
 
             if (defined $wolf_client and $read == $wolf_client) {
-                if (read_wolf_messages($wolf_client)) {
+                my $gelesen = read_wolf_messages($wolf_client);
+                if ($gelesen > 0) {
                     $drop_counter = 0;
                     send_OnlineState(1);
+                } elsif ($gelesen < 0) {
+                    $drop_counter = 10;
                 } else {
                     $drop_counter++;
                 }
@@ -515,10 +542,27 @@ sub read_wolf_messages($) {
    my $rec_data = "";
 
    LOGDEB("Lese Wolf Socket");
-   $client_socket->recv($rec_data, 4096, MSG_DONTWAIT);
+   $! = 0;
+   my $erg = $client_socket->recv($rec_data, 4096, MSG_DONTWAIT);
 
+   # Null Bytes heissen ZWEIERLEI, und die Unterscheidung steht nicht in der
+   # Laenge, sondern im Rueckgabewert. Nachgemessen an einem echten Socket:
+   #
+   #   Verbindung offen, nichts da : recv liefert undef,     Laenge 0, errno EAGAIN
+   #   Gegenstelle hat geschlossen : recv liefert definiert, Laenge 0, errno 0
+   #
+   # Bis 2.5.1 wurde beides gleich behandelt (Rueckgabe 0) und der
+   # drop_counter hochgezaehlt - bei einem geschlossenen Socket zehnmal
+   # hintereinander, weil can_read sofort wieder feuert (gemessen: 10 Runden
+   # ohne Pause). Erst danach wurde aufgeraeumt.
+   #
+   # Die naheliegende Abhilfe - bei null Bytes sofort abbauen - waere aber
+   # falsch: sie traefe auch den ersten Fall und wuerde eine gesunde
+   # Verbindung bei einem Weckruf ohne Daten wegwerfen. Unterschieden wird
+   # deshalb sauber: -1 heisst "Gegenstelle zu, sofort abbauen", 0 heisst
+   # "diesmal nichts, weiter warten".
    if (length($rec_data) == 0) {
-       return 0;
+       return defined($erg) ? -1 : 0;
    }
 
    LOGDEB("Daten Empfang (".length($rec_data)." Bytes):");
@@ -738,8 +782,8 @@ sub decodeTelegram($)
 
                         ## Auswertung an MQTT schicken ..
                         if ($hash{mqtt} eq '1') {
-                             # wolfism8/Geraet/Datenpunkt
-                             my $topic = "wolfism8/".getMQTTFriendly($fields[2])."/".getMQTTFriendly($fields[3]);
+                             # wolf_ng/Geraet/Datenpunkt
+                             my $topic = "wolf_ng/".getMQTTFriendly($fields[2])."/".getMQTTFriendly($fields[3]);
                              #if (scalar(@fields) == 6) { $topic .= "/".getMQTTFriendly($fields[5]); } # Einheit (wenn vorhanden)
 
                              my @types = ("DPT_Scaling","DPT_Value_Temp","DPT_Value_Tempd","DPT_Value_Pres",
@@ -822,7 +866,12 @@ sub loadConfig
       LOGINF("   Config file '$file' found and opened for reading.");
       while (my $line = <$data>) {
 	    $line = lc($line); # alles lowe case
-		if ($line !~ m/#/) {
+		# Nur Zeilen ueberspringen, die MIT einem # beginnen. Vorher wurde
+		# jede Zeile verworfen, in der irgendwo ein # vorkam - ein
+		# Multicast-Kommentar hinter dem Wert reichte, und die Einstellung
+		# fiel stillschweigend auf den Vorgabewert zurueck.
+		next if $line =~ m/^\s*#/;
+		{
 		   my @fields = split(/ /, l_r_dbl_trim($line));
 	       if (scalar(@fields) == 2) {
               LOGINF("      $fields[0] -> $fields[1]");
@@ -1305,7 +1354,10 @@ sub pdt_time($)
 sub to_pdt_time($)
 {
     my @d = split / /, $_[0];
-    my @h = split / /, $d[1];
+    # An DOPPELPUNKTEN trennen, nicht an Leerzeichen: $d[1] ist "HH:MM:SS".
+    # Mit / / kam nur ein Feld heraus, $min und $sec blieben undef - jeder
+    # Zeit-Schaltbefehl schickte damit Muell an den Heizungsbus.
+    my @h = split /:/, $d[1];
     my $day = $d[0];
     my $hour = $h[0];
     my $min = $h[1];

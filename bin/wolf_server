@@ -14,7 +14,35 @@
 
 . $LBHOMEDIR/libs/bashlib/loxberry_log.sh
 
-BINPATH=${LBPBIN}/wolfism8
+BINPATH=${LBPBIN}/wolf_ng
+
+# ---------------------------------------------------------------------------
+# Prozesssuche - bitte nicht auf pkill zurueckbauen
+#
+# "pkill -f wolf_ism8i.pl" durchsucht die GANZE Befehlszeile jedes Prozesses
+# und trifft damit auch einen Editor mit offener Datei oder ein zweites
+# Exemplar des Plugins. "ps -C" und "killall" vergleichen den comm-Namen, der
+# bei einem Skript mit Shebang "bash" bzw. "perl" lautet - die finden nichts.
+#
+# Ein Treffer liegt vor, wenn das erste Argument der volle Skriptpfad ist
+# (Shebang-Start) oder wenn das erste Argument ein Interpreter ist UND der
+# volle Pfad unter den Argumenten steht (der Watchdog startet das
+# Auswertungsmodul als "perl -X <pfad>").
+# ---------------------------------------------------------------------------
+wolf_beenden() {
+    SKRIPT="$1"
+    for D in /proc/[0-9]*; do
+        P=$(basename "$D")
+        [ -r "$D/cmdline" ] || continue
+        ARGS=$(tr '\0' '\n' < "$D/cmdline" 2>/dev/null)
+        ERSTES=$(printf '%s\n' "$ARGS" | head -1)
+        if [ "$ERSTES" = "$SKRIPT" ] ||
+           { case "$(basename "$ERSTES")" in perl|bash|sh|dash) true ;; *) false ;; esac &&
+             printf '%s\n' "$ARGS" | grep -qxF "$SKRIPT"; }; then
+            kill "$P" 2>/dev/null
+        fi
+    done
+}
 
 # Carry out specific functions when asked to by the system
 case "$1" in
@@ -25,21 +53,29 @@ case "$1" in
     ;;
   'stop')
     echo "Stopping Wolf ISM8i server"
-    pkill -f ${BINPATH}/wolf_watchdog.sh
-    pkill -f wolf_ism8i.pl
+    wolf_beenden "${BINPATH}/wolf_watchdog.sh"
+    wolf_beenden "${BINPATH}/wolf_ism8i.pl"
     RETVAL=$?
     ;;
   'restart')
     echo "Restarting Wolf ISM8i server"
-    pkill -f ${BINPATH}/wolf_watchdog.sh
-    pkill -f wolf_ism8i.pl
+    wolf_beenden "${BINPATH}/wolf_watchdog.sh"
+    wolf_beenden "${BINPATH}/wolf_ism8i.pl"
     RETVAL=$?
 	sleep 1
     ${BINPATH}/wolf_watchdog.sh &
     RETVAL=$?
     ;;
   'status')
-    cnt=`ps -ef | grep "${BINPATH}/wolf_watchdog.sh" | grep -v grep | wc -l`
+    # "ps -ef | grep" zaehlt sich selbst mit, wenn das grep -v grep einmal
+    # nicht greift. Argumentweise ueber /proc ist eindeutig.
+    cnt=0
+    for D in /proc/[0-9]*; do
+        [ -r "$D/cmdline" ] || continue
+        if tr '\0' '\n' < "$D/cmdline" 2>/dev/null | head -1 | grep -qxF "${BINPATH}/wolf_watchdog.sh"; then
+            cnt=1
+        fi
+    done
     if [ "$cnt" -eq "0" ] ; then
         echo "Wolf ISM8i server is not running"
     else
