@@ -340,8 +340,7 @@ if ($wi_udpin) { ?> &middot; <?= sprintf(wi_t('LOXONE.UDPRELAY'), '<span class="
 <div class="sm-small"><?= wi_t('LOXONE.OHNE_AUSWAHL') ?></div>
 
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?= wi_t('LEGENDE.LESEN') ?></span>
-<span><i class="sm-punkt sm-b-aktion"></i> <?= wi_t('LEGENDE.AKTION_DATEI') ?></span>
+<span><i class="sm-punkt sm-b-aktion"></i><?= wi_t('LEGENDE.AKTION_DATEI') ?></span>
 </div>
 
 <h3 class="sm-h3"><?= wi_t('LOXONE.H_MQTT_VORLAGEN') ?></h3>
