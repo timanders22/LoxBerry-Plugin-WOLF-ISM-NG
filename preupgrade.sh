@@ -77,4 +77,22 @@ echo "$SICHERUNG" > "$PCONFIG/.upgrade_pfad" 2>/dev/null
 echo "<INFO> Backing up existing config files $PCONFIG/* -> $SICHERUNG/"
 cp -p -r "$PCONFIG/." "$SICHERUNG/" 2>/dev/null || true
 
+
+# ==== NETZ-EINSTELLUNGEN-UPDATE (automatisch eingefuegt, nicht doppeln) ====
+# Zweitschrift NEBEN den Konfigurationsordner, zusaetzlich zur bisherigen
+# Sicherung. Grund: der Installer kopiert config/* aus dem Archiv ueber
+# config/plugins/<ordner> (plugininstall.pl Zeile 899, cp -r ohne -n) und
+# ueberschreibt dabei die Datei des Nutzers. Bisher haing die Rettung allein
+# an postupgrade.sh. Laeuft das aus irgendeinem Grund nicht durch, greift
+# jetzt postinstall.sh auf diese Zweitschrift zu - sie liegt ausserhalb des
+# ueberschriebenen Ordners und wird vom Installer nicht angefasst.
+NETZ_BASE="${5:-$LBHOMEDIR}"
+NETZ_PDIR="${3:-wolf_ng}"
+NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
+if [ -s "$NETZ_CFG/wolf_ism8i.conf" ]; then
+    cp -p "$NETZ_CFG/wolf_ism8i.conf" "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_ism8i.conf" 2>/dev/null \
+        && chmod 0600 "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_ism8i.conf" 2>/dev/null
+fi
+echo "<INFO> Zweitschrift der Einstellungen angelegt."
+
 exit 0
