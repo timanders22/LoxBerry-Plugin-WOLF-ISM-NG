@@ -311,6 +311,7 @@ $wi_reiter = array(
 <div class="sm-step"><?= wi_t('LOXONE.S4') ?></div>
 
 <h2><?= wi_t('LOXONE.H_MQTT') ?></h2>
+<?php if (!function_exists('wi_hs_autostart')) { function wi_hs_autostart() { $h = getenv('LBHOMEDIR') ?: '/opt/loxberry'; $g = $h . '/config/system/general.json'; if (!is_file($g)) { return null; } $j = json_decode((string) @file_get_contents($g), true); if (!is_array($j) || !isset($j['Mqtt'])) { return null; } return !empty($j['Mqtt']['Gatewayautostart']); } } if (wi_hs_autostart() === false) { ?><div class="sm-alert sm-warn"><b>MQTT:</b> <?php echo wi_t('LOXONE.W_AUTOSTART'); ?></div><?php } ?>
 <div class="sm-small" style="margin-bottom:8px;">
 <?= sprintf(wi_t('LOXONE.MQTT_THEMEN'), '<span class="sm-mono">wolf_ng/&lt;' . wi_t('LOXONE.TH_GERAET') . '&gt;/&lt;' . wi_t('LOXONE.TH_DP') . '&gt;</span>') ?>
 <?= sprintf(wi_t('LOXONE.MQTT_ONLINE'), '<span class="sm-mono">wolf_ng/online</span>') ?>
