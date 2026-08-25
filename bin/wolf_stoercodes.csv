@@ -1,0 +1,31 @@
+# Wolf ISM8 - Stoercodes im Klartext (V23)
+#
+# Je Zeile: Nummer;Klartext
+# Zeilen, die mit einem Doppelkreuz beginnen, werden uebersprungen.
+#
+# DIESE DATEI IST ABSICHTLICH LEER.
+#
+# Der Datenpunkt 372 "Zuletzt aktiver Stoercode" (Firmware 1.8 und 1.9) kommt
+# als Zahl 0 bis 255 an. Welche Zahl welche Stoerung bedeutet, steht in der
+# Wolf-Dokumentation - in der Montage- und Wartungsanleitung des Geraets bzw.
+# in der Schnittstellenbeschreibung des ISM8. Diese Angaben liegen dem Plugin
+# NICHT bei, und sie werden hier auch nicht erfunden: eine Zuordnung, die
+# niemand nachgemessen hat, saehe genauso aus wie eine belegte, und in Loxone
+# stuende danach ein Klartext, der falsch sein kann.
+#
+# SO TRAGEN SIE IHRE EIN
+#
+# Legen Sie eine Kopie dieser Datei unter
+#     config/plugins/<ordner>/wolf_stoercodes.csv
+# an und ergaenzen Sie sie. Dort ueberlebt sie ein Update; die Fassung hier
+# unter bin/ wird bei jedem Update ueberschrieben.
+#
+# Beispiel fuer die Form (die Nummern sind KEINE echten Wolf-Stoercodes,
+# sondern zeigen nur, wie eine Zeile aussieht - deshalb stehen sie hinter
+# einem Doppelkreuz):
+#
+# 1;Beispiel - hier den Klartext aus Ihrer Anleitung eintragen
+# 2;Beispiel - eine Zeile je Stoercode
+#
+# Sobald die Datei Eintraege hat, zeigt der Reiter "Einbindung in Loxone" eine
+# Tabelle, und der Klartext laesst sich als Statustext in Loxone uebernehmen.

@@ -79,6 +79,6 @@ netz_zurueck() {
         fi
     fi
 }
-netz_zurueck "wolf_ism8i.conf" "61a2d15873599ccb0187c7c7a5636e452278263beb262ead4b272487d7af494a"
+netz_zurueck "wolf_ism8i.conf" "7cf94e7c38abb28a3f40a68beaa1964f1fea04b52bfc394b1d66f1b7855b164e"
 
 exit 0

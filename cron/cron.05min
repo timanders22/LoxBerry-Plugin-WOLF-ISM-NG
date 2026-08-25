@@ -1,0 +1,59 @@
+#!/bin/bash
+# Wolf ISM8 - Waechter ueber den Waechter (V10)
+#
+# WARUM ES DAS GIBT
+#
+# Der Watchdog wird beim Hochfahren aus daemon/daemon gestartet und sonst nur
+# von der Oberflaeche. Und er beendet sich selbst: stuerzt das Auswertungsmodul
+# zwanzigmal in Folge ab, schreibt er LOGCRIT und geht mit exit 1
+# (bin/wolf_watchdog.sh). Danach lief bis zum naechsten Neustart des Rechners
+# nichts wieder an - und in Loxone sah alles normal aus, weil virtuelle
+# Eingaenge ihren letzten Wert behalten.
+#
+# DREI DINGE, DIE DIESES SKRIPT EINHAELT
+#
+#  1. Die Pfade kommen aus REPLACELBP*, nicht aus einer Rechnung mit ".." und
+#     nicht aus einem fest verdrahteten /opt/loxberry. Der Installer ersetzt
+#     die Platzhalter beim Einbau.
+#  2. Es SCHWEIGT im Normalfall. Ein Cron, der in den Systemlogger schreibt,
+#     erzeugt sonst 288 Zeilen am Tag.
+#  3. Es tut NICHTS, wenn das Plugin ausgeschaltet ist. Ein Waechter, der
+#     gegen den Willen des Anwenders arbeitet, ist schlimmer als keiner.
+#
+# Diese Datei ist eine DATEI, kein Verzeichnis. LoxBerry fuehrt in
+# system/cron/cron.05min/ nur Dateien aus.
+
+BINPATH="REPLACELBPBINDIR"
+CONFIG="REPLACELBPCONFIGDIR/wolf_ism8i.conf"
+
+# --- 3. Ausgeschaltet? Dann ist hier nichts zu tun. ---
+enabled=$(awk '/^enable[ \t]/{print $2}' "$CONFIG" 2>/dev/null)
+enabled=${enabled:-0}
+[ "$enabled" = "1" ] || exit 0
+
+# --- Laeuft der Waechter? ---
+# Argumentweise ueber /proc, wie ueberall in diesem Plugin: "pkill -f" traefe
+# auch einen Editor mit offener Datei, und "ps -C" vergleicht den comm-Namen,
+# der bei einem Skript mit Shebang "bash" lautet.
+wolf_laeuft() {
+    SKRIPT="$1"
+    for D in /proc/[0-9]*; do
+        [ -r "$D/cmdline" ] || continue
+        ARGS=$(tr '\0' '\n' < "$D/cmdline" 2>/dev/null)
+        ERSTES=$(printf '%s\n' "$ARGS" | head -1)
+        if [ "$ERSTES" = "$SKRIPT" ] ||
+           { case "$(basename "$ERSTES")" in perl|bash|sh|dash) true ;; *) false ;; esac &&
+             printf '%s\n' "$ARGS" | grep -qxF "$SKRIPT"; }; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+wolf_laeuft "$BINPATH/wolf_watchdog.sh" && exit 0
+
+# --- Er laeuft nicht. Nachstarten und EINMAL sagen, warum. ---
+echo "Wolf ISM8: der Watchdog lief nicht - wird nachgestartet."
+"$BINPATH/wolf_server" start > /dev/null 2>&1
+
+exit 0

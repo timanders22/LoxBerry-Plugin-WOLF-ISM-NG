@@ -46,6 +46,29 @@ Kern ausgeliefert werden - getrennt davon stellen die Verfasser sie unter die
 MIT-Lizenz.
 
 
+Die Mailadresse bleibt stehen
+-----------------------------
+
+Werkzeuge/freigabe_pruefen.py beanstandet vor jeder Veroeffentlichung die
+weiter oben zitierte Mailadresse des Urhebers. Sie steht an drei Stellen:
+im Dateikopf von bin/wolf_ism8i.pl, in dieser Datei und in README.md. Das
+ist kein Versehen und wird nicht behoben:
+
+  * Sie ist Bestandteil der Bedingungen, die weiter oben woertlich zitiert
+    sind. Ohne sie liesse sich die Genehmigung fuer einen kommerziellen
+    Einsatz nicht einholen - die Lizenz waere nicht ausuebbar.
+  * Der Urhebervermerk im Dateikopf darf nicht entfernt werden, und die
+    Adresse gehoert zu ihm.
+  * Sie wird seit 2017 so veroeffentlicht.
+
+Entschieden am 25.08.2026 fuer Fassung 3.0.8. Der Befund bleibt dabei
+bewusst stehen: das Pruefwerkzeug bekommt KEINE Ausnahme fuer einzelne
+Adressen eingetragen. Eine solche Liste waere genau der Weg, auf dem sich
+spaeter ein echtes Geheimnis unbemerkt vorbeischmuggeln liesse. Wer die
+Meldung sieht, findet hier den Grund, statt die Frage jedes Mal neu
+aufzuwerfen.
+
+
 Marken
 ------
 WOLF und ISM8i sind Marken der WOLF GmbH. Dieses Plugin steht in keiner

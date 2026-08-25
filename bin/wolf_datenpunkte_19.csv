@@ -257,7 +257,7 @@
 370;Bedienmodul (BM-2);Mischersolltemperatur MK2;DPT_Value_Temp;Out/-;°C
 371;Bedienmodul (BM-2);Mischersolltemperatur MK3;DPT_Value_Temp;Out/-;°C
 #
-372;Allgmein;Zuletzt aktiver Störcode;DPT_Value_1_Ucount;Out/-;-
+372;Allgemein;Zuletzt aktiver Störcode;DPT_Value_1_Ucount;Out/-;-
 #
 212;Wärmepumpe 2 (BWL-1-S, CHA);Störung;DPT_Switch;Out/-;-
 213;Wärmepumpe 2 (BWL-1-S, CHA);Betriebsart;DPT_HVACContrMode;Out/-;-

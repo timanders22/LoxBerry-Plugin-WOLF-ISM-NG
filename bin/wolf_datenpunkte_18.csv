@@ -257,4 +257,4 @@
 370;Bedienmodul (BM-2);Mischersolltemperatur MK2;DPT_Value_Temp;Out/-;°C
 371;Bedienmodul (BM-2);Mischersolltemperatur MK3;DPT_Value_Temp;Out/-;°C
 #
-372;Allgmein;Zuletzt aktiver Störcode;DPT_Value_1_Ucount;Out/-;-
+372;Allgemein;Zuletzt aktiver Störcode;DPT_Value_1_Ucount;Out/-;-

@@ -6,6 +6,7 @@ use utf8;
 
  # client
 
+use Socket;
 use IO::Socket::Multicast;
 
 #use constant GROUP => '239.7.7.77';
@@ -18,7 +19,11 @@ my $sock = IO::Socket::Multicast->new(
            Proto     => 'udp',
            LocalPort => $mc_port,
            ReuseAddr => '1',
-           ReusePort => defined(&ReusePort) ? 1 : 0,
+           # defined(&ReusePort) prueft, ob es ein UNTERPROGRAMM dieses
+           # Namens gibt - das gibt es nicht, der Ausdruck war immer falsch.
+           # Gemeint war die Konstante SO_REUSEPORT, und die gibt es nicht
+           # auf jeder Plattform. Deshalb wird sie geprueft, nicht geraten.
+           ReusePort => (eval { Socket::SO_REUSEPORT(); 1 } ? 1 : 0),
   ) or die "ERROR: Cant create socket: $@!";
 
 $sock->mcast_add($mc_addr) or die "ERROR: Couldn't set group: $@!";

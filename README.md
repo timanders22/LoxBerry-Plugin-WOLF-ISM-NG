@@ -23,6 +23,264 @@ Die Kette: **Dr. Mugur Dietrich** (Auswertungsmodul, 2017) → **Dominik
 Holland** ([Gagi2k/LoxBerry-Plugin-WolfIsm8](https://github.com/Gagi2k/LoxBerry-Plugin-WolfIsm8),
 Einbettung als LoxBerry-Plugin) → diese Fortführung.
 
+## Version 3.0.8 — dreissig Befunde behoben, dreiundzwanzig Funktionen dazu
+
+Aus einer zeilenweisen Durchsicht der 3.0.7 mit zwei Gegenlesern. Die
+Prüfstände liegen unter `Pruefung-WOLF-ISM-NG-3.0.8/`; jede Korrektur ist in
+beide Richtungen geeicht — die Prüfreihen sind auf der alten Fassung rot und
+auf dieser grün.
+
+### Neue Funktionen
+
+**Das Wichtigste zuerst: die Oberfläche zeigt jetzt Werte.** Bis 3.0.7 gab es
+dort keinen einzigen Messwert — wer wissen wollte, welche Vorlauftemperatur
+anliegt, brauchte den MQTT-Finder oder eine Textsuche im Protokoll. Der Dienst
+schreibt sein Zustandsabbild jetzt nach `data/plugins/<ordner>/zustand.json`
+(unteilbar über `rename`), und der Reiter *Test* zeigt daraus eine Tabelle mit
+Gerät, Datenpunkt, Wert, Einheit und Alter — samt Klartext für Betriebsarten
+und Störcodes.
+
+**Lebenszeichen.** `<präfix>/zeitstempel` und `<präfix>/zaehler` gehen bei jedem
+Takt hinaus, auch wenn sich kein Wert geändert hat — sonst wäre der Zeitstempel
+selbst der älteste Wert im Broker. Der Zähler läuft 0…999 um; darauf legt man in
+Loxone eine Änderungsüberwachung. Ohne ihn ist ein toter Dienst von einer ruhigen
+Heizung nicht zu unterscheiden. Ab Werk alle 60 s.
+
+**Firmware-Plausibilität.** Unbekannte Datenpunktkennungen werden gezählt und ihr
+Bereich gemerkt. Der Reiter *Test* sagt dann konkret: *39 Telegramme trugen
+Kennungen zwischen 212 und 250, die in der eingestellten Tabelle nicht stehen —
+diese kennt Firmware 1.9.* **Die Grenze steht dabei:** so lässt sich nur der Fall
+„Tabelle zu alt“ erkennen. Ist sie zu neu, kommen die zusätzlichen Kennungen nie
+an, und Ausbleiben ist kein Befund.
+
+**Eigener Reiter MQTT.** Haken, Themen-Präfix, Gateway-Zustand, die vollständige
+Themenliste mit Bedeutung — und der Satz, der bisher ganz fehlte: **welches Abo
+im Gateway einzutragen ist.** Er hängt an `Mqtt.Gatewayversion`: unter Fassung 1
+das Abonnement `<präfix>/#`, unter Fassung 2 ist nichts einzutragen. Ist die
+Fassung nicht lesbar, stehen beide Sätze da — einen von beiden zu behaupten
+wäre für die Hälfte der Anlagen falsch.
+
+**Das Themen-Präfix ist einstellbar** (Vorgabe unverändert `wolf_ng`). Wer zwei
+ISM8 am selben Broker betreibt, kann sie damit trennen. Eine Änderung benennt
+**sämtliche** Themen um — dafür gibt es das Aufräumen.
+
+**Selbstprüfung im Reiter Test.** Siebzehn Zeilen mit Haken, Kreuz oder Strich,
+ohne einen einzigen Klick. Drei Ausgänge, nicht zwei: der Strich heißt *hier war
+nichts zu messen* und zählt in keiner Zusammenfassung als bestanden. Und jede
+Zeile, die über eine Menge urteilt, prüft zuerst, ob die Menge leer ist.
+
+**Baustein-Liste.** Acht Bausteine zum 1:1-Nachbauen, mit Typ, Namensvorschlag,
+Parametern und Anschlüssen — dazu die Erläuterungen, an denen es sonst scheitert
+(der Benachrichtigungsbaustein sendet nur beim Wechsel von Aus auf Ein; mehrere
+Quellen niemals direkt an seinen Eingang).
+
+**Betriebsarten im Klartext.** Über MQTT geht die nackte Zahl hinaus; die
+Klartexte standen bisher nur im Perl. Jetzt stehen sie als Tabelle im Reiter
+*Einbindung in Loxone*, mit fertigem Statustext zum Kopieren. Der Reiter *Test*
+zählt sie gegen das Auswertungsmodul nach, damit die beiden Tabellen nicht
+auseinanderlaufen.
+
+**Vorlagen nur für die tatsächliche Anlage.** Ein Haken schränkt die
+Loxone-Vorlage auf die Datenpunkte ein, für die schon ein Telegramm kam. Aus 267
+Zeilen wird damit die eigene Heizung — ein virtueller Eingang, der nie einen Wert
+bekommt, sieht in Loxone genauso aus wie einer mit 0.
+
+**Die Loxone-Vorlagen selbst** entsprechen jetzt den Ausfuhren aus Loxone Config:
+`HintText`, `<Info templateType=…>`, `CmdAnswer`, die gemessene
+Attributreihenfolge — und **Einheiten und Grenzen je KNX-Datenpunkttyp** statt
+pauschal ±2147483647. 125 der 267 lesbaren Datenpunkte tragen eine Einheit, die
+bisher nirgends ankam.
+
+**Schreibprobe mit Trockenlauf.** Ein Schaltbefehl lässt sich erproben, ohne
+Loxone einzurichten. Der Trockenlauf läuft durch **dieselbe** Funktion wie der
+Ernstfall und sendet nichts — und er spricht nicht die Sprache des Ernstfalls.
+
+**Wächter über den Wächter.** `cron/cron.05min` startet den Watchdog nach, wenn
+er nicht mehr läuft. Er schweigt im Normalfall und tut nichts, wenn das Plugin
+ausgeschaltet ist. Der Reiter *Test* prüft, ob der Eintrag überhaupt angekommen
+ist — und ob er eine **Datei** ist.
+
+**Weiteres:** Konfiguration ohne Neustart (`SIGHUP`; nur ein Portwechsel braucht
+noch einen) · Rückmeldung `OK`/`ERR` auf dem TCP-Befehlsweg · Kappung des
+Datenpunkt-Protokolls bei 512 kB, mit Knopf zum Leeren · Einstellungen sichern
+und zurückspielen · Ausgabeformat als Auswahlfeld (`none`/`data`/`csv`/`fhem`)
+· Multicast-Gruppe wieder wählbar · vollständige, filterbare Datenpunkttabelle
+· Aufräumen retained gebliebener Themen · periodischer Vollabzug (ab Werk aus).
+
+**Ein Vorschlag ist nur zur Hälfte umgesetzt, und das steht hier:** Die
+**Störcode-Tabelle** (Datenpunkt 372) ist gebaut, aber **leer ausgeliefert**. Die
+Zuordnung steht in der Wolf-Dokumentation, nicht im Plugin — und sie wurde
+bewusst nicht erfunden. Wer sie hat, trägt sie in
+`config/plugins/<ordner>/wolf_stoercodes.csv` ein; dort überlebt sie ein Update.
+Die Form steht in `bin/wolf_stoercodes.csv`.
+
+### Der Tippfehler im Gerätenamen
+
+Der Datenpunkt 372 hieß in den Firmwaretabellen 1.8 und 1.9 **„Allgmein“**.
+Er heißt jetzt **„Allgemein“**. Damit wandert genau ein MQTT-Thema:
+
+    <präfix>/Allgmein/Zuletzt/aktiver/Störcode
+    <präfix>/Allgemein/Zuletzt/aktiver/Störcode
+
+Wer diesen Datenpunkt benutzt, zieht den virtuellen Eingang nach. Der alte Wert
+bleibt retained im Broker stehen — dafür gibt es im Reiter *MQTT* das
+Aufräumen.
+
+### Was falsche Werte erzeugt hat
+
+- **Die KNX-Kennung `0x7FFF` wurde zu 670760,96.** Der Dateikopf von
+  `pdt_knx_float` nennt sie seit jeher als Kennzeichen für *ungültige Daten*;
+  geprüft wurde sie nie. Ein abgezogener oder defekter Fühler lieferte damit
+  einen Extremwert in die Loxone-Regelung — und der sah aus wie ein Messwert.
+  Jetzt wird nichts gesendet und eine Meldung geschrieben.
+- **`100;abc` hat den Datenpunkt ausgeschaltet.** Der Vergleich `$data < 0`
+  machte aus einer Zeichenkette eine 0, die Prüfung bestand, und
+  `pack("C", $data)` erzeugte das Byte `0x00`. Der Befehl wirkte, nur anders
+  als gemeint, und im Protokoll stand kein Wort davon. Jetzt abgewiesen.
+- **Der Fehlerwert `-1` wurde zu einem Telegramm.** `to_pdt_time` und
+  `to_pdt_date` gaben ihn im Fehlerfall zurück, `parseInput` reichte ihn
+  ungeprüft weiter, und auf dem Bus kamen die ASCII-Zeichen `2d 31` an.
+- **`12:30:00` wurde zu „Sonntag 00:00:00“.** Ohne Wochentag lieferte
+  `split / /` nur ein Feld, die Bereichsprüfungen behandelten `undef` als 0,
+  und ein unbekannter Wochentag ergab über `-1 << 5` den Tag 7. KNX kennt
+  Tag 0 — eine Angabe ohne Wochentag ist jetzt gültig, ein falscher Wochentag
+  nicht.
+- **Beim Kodieren fehlte der Bereichsschutz.** Der Exponent war nicht
+  begrenzt; aus 700000 wurde −9,8. Nachgerechnet kamen schon die im Code
+  dokumentierten Bereichsgrenzen nicht heil durch die eigene Kodierung.
+- **Die Fehlerkennung sah das Wertfeld nicht an.** `ERR:NoResult` und
+  `ERR:TypeNotFound` landen dort — auf den Wegen `fhem` und `csv` gingen sie
+  als „Wert“ an den Miniserver.
+
+### Verbindung und Rahmen
+
+- **Eine zweite TCP-Verbindung hat die bestehende, gesunde hinausgeworfen.**
+  Solange schon ein Client stand, wurde der Annahmezweig übersprungen; die
+  wartende Verbindung blieb im Rückstau, `can_read` feuerte dauernd, und der
+  Abbruchzähler riss die alte Verbindung binnen Millisekunden ab. Gemessen:
+  26 von 30 folgenden Telegrammen wurden nie mehr verarbeitet. Der häufigste
+  Auslöser im Alltag ist das ISM8 selbst, das nach einer Netzstörung neu
+  verbindet. Jetzt werden mehrere Verbindungen nebeneinander gehalten, jede
+  mit eigenem Puffer; abgeräumt wird eine erst, wenn die Gegenstelle sie
+  wirklich schließt. Der Abbruchzähler ist ersatzlos entfallen.
+- **Telegramme über Puffergrenzen gingen verloren.** Was ein einzelner `recv`
+  lieferte, galt als vollständige Telegrammfolge. Ein Telegramm, das sich auf
+  zwei Lesevorgänge verteilte, wurde in **beiden** Hälften verworfen — und da
+  4096 kein Vielfaches der Telegrammlänge ist, trat das beim Vollabzug
+  planmäßig ein. Jetzt wird angesammelt und nur zerlegt, was vollständig da
+  ist.
+- **Der Pull-Request hat 22 Byte behauptet und war 17 lang.** Zwölf Elemente,
+  eine Vorlage für siebzehn, fünf stillschweigende Nullbytes. Das Längenfeld
+  wird jetzt aus dem Rahmen gerechnet.
+  **Offen und ausdrücklich nicht gemessen:** ob das ISM8 hinter `F0 D0` noch
+  Nutzdaten erwartet. Dort stehen wie bisher Nullbytes; erfunden wurde nichts.
+- **Ein misslungener UDP-Versand hat den ganzen Server beendet** — ein
+  `or die` auf der Zeile, durch die jeder Weg zum Miniserver läuft.
+- **MQTT wurde geprüft, nachdem es benutzt war.** War der Broker beim
+  Hochfahren nicht erreichbar, starb der Dauerläufer, bevor die ISM8-Ports
+  offen waren; der Wächter gab nach zwanzig Anläufen endgültig auf.
+- **Der Online-Zustand geht jetzt `retain`** und wird einmal beim Start
+  angesagt. Ein Miniserver, der sich nach dem Plugin verbindet, sah ihn sonst
+  erst beim nächsten Wechsel.
+- `SIGPIPE` wird ignoriert, `SIGTERM` meldet `online;0` und schließt das
+  Protokoll — ein `LOGEND` kam in der ganzen Datei nicht vor.
+
+### Oberfläche
+
+- **Kein Merkmal gegen fremde Absender.** Zwölf Formulare, kein Wachposten:
+  ein POST von einer fremden Seite mit `save=1` setzte `enable` auf 0,
+  schaltete MQTT und Direktausgabe ab und hielt den Server an. Jetzt ein
+  Merkmal je Formular und **ein** Wachposten davor.
+- **Ein unvollständiger POST setzte Ports auf die Vorgabe** statt auf den
+  bestehenden Wert. Und unzulässige Eingaben wurden stillschweigend
+  zurechtgebogen; sie werden jetzt gesammelt beanstandet, ohne das Speichern
+  der übrigen Felder zu verhindern.
+- **Zwei Vorgabelisten widersprachen sich** in zwei von elf Werten (`output`,
+  `mqtt`). Fehlte ein Schlüssel in der Datei, zeigte die Oberfläche einen
+  Betriebszustand an, den es nicht gab.
+- **`%MS_IP%` wurde nie ersetzt.** Der Platzhalter stand in der
+  mitgelieferten Konfiguration, kein Installationsskript ersetzte ihn, und
+  die Adressprüfung setzte still `239.7.7.77`. Bis zum ersten Speichern
+  gingen die UDP-Daten damit an die Multicast-Gruppe statt an den
+  Miniserver.
+- **Die MQTT-Ausgangsvorlage wurde auch mit Port 0 ausgeliefert** — die
+  Oberfläche warnte davor und der Knopf daneben lieferte sie trotzdem. Eine
+  Vorlage ohne einen einzigen Datenpunkt ebenso.
+- **Die Themenliste im Reiter Test nannte acht Themen, die nie erscheinen.**
+- Ein Reiterklick verwarf Eingaben in den anderen Reitern (`preventDefault`
+  fehlte). Die Reiterleiste ist wieder für `hausstandard_pruefen.py`
+  messbar. Knöpfe tragen `!important` und je Gruppe eine eigene Hover-Farbe.
+- Der Konfigurationsleser der Oberfläche hält sich an dieselbe
+  Kommentarregel wie der Dienst — vorher waren es zwei Leser derselben Datei
+  mit verschiedenen Regeln.
+
+### Kleineres
+
+- Der Doppelt-senden-Filter verglich den Zeitstempel mit und prüfte nur gegen
+  den unmittelbaren Vorgänger; jetzt je Datenpunkt.
+- MQTT-Weg und UDP-Weg tragen dieselben Werte — vorher wichen sie bei
+  Uhrzeit, Datum und den beiden Ucount-Typen ab.
+- Eine unbekannte Firmware (`fw_version 1.6`) hat das Plugin dauerhaft
+  getötet; jetzt Rückfall auf 1.8 mit Meldung.
+- `enable` wird mitgeschrieben, wenn der Dienst die Konfiguration neu anlegt.
+- `wolf_server status` prüft beide Prozesse, `stop` misst seine Wirkung.
+- Sieben Helfer ohne Aufrufer entfernt; `create_logdir` wird jetzt wirklich
+  gerufen.
+- Bytefolgemarke aus `wolf_datenpunkte_15.csv`, `defined(&ReusePort)` in
+  `ism8i_comtest.pl` berichtigt, deutsche Anführungszeichen im englischen
+  Text.
+
+### Was sich für bestehende Anlagen ändert
+
+Drei Punkte, die an einer laufenden Anlage sichtbar werden können:
+
+1. **Auf dem UDP-Weg `data`** gehen Uhrzeit und Datum jetzt als Zahl hinaus
+   statt als Text (`Mo 12:30:00`), und die beiden Ucount-Typen aufbereitet
+   statt roh. Betroffen sind in Firmware 1.9 siebzehn Datenpunkte.
+2. **Auf dem Weg `fhem`** enthalten Werte keine Leerzeichen mehr
+   (`Heiz-_Warmwasserbetrieb`) — das Format trennt Name und Wert durch ein
+   Leerzeichen, die Werte enthielten selbst welche.
+3. **Ein defekter Fühler sendet keinen Wert mehr**, statt 670760,96 zu
+   senden. In Loxone bleibt der letzte Wert stehen — wer das erkennen will,
+   braucht die Ausfallerkennung (`online_timeout`, ab Werk aus).
+
+Die Ports (12004, 12005, 35353) und die MQTT-Themen ändern sich **nicht**.
+
+### Was an keiner echten Anlage gemessen ist
+
+**Diese Fassung ist ohne ein ISM8 entstanden.** Alle 122 Prüfzeilen laufen
+gegen Attrappen; jeder Prüfstand ist in beide Richtungen geeicht (rot auf
+3.0.7, grün auf 3.0.8), aber ein Prüfstand misst den Quelltext, nicht die
+Heizung. Was das offen lässt, steht hier zusammen — statt verteilt in den
+Abschnitten darüber:
+
+* **Der periodische Vollabzug wird ausgeschaltet ausgeliefert.** Der Rahmen
+  lügt seit 3.0.8 nicht mehr über seine eigene Länge, aber ob das ISM8 die
+  Nutzlast hinter `F0 D0` annimmt, ist ungemessen. Wer ihn einschaltet,
+  probiert etwas aus.
+* **Ob das MQTT-Gateway eine leere Nutzlast als Löschung weiterreicht**, ist
+  ungemessen. Das Aufräumen sagt das in seiner eigenen Ausgabe.
+* **Die Störcode-Tabelle ist leer.** Die Zuordnung steht in der
+  Wolf-Dokumentation, nicht im Plugin — und sie wurde bewusst nicht erfunden.
+* **Das Schreiben zurück zur Anlage** ist nur im Trockenlauf geprüft. Der
+  läuft durch dieselbe Funktion wie der Ernstfall und sendet nichts.
+* **Firmware 1.9** ist aus den Tabellen abgeleitet, nicht an einem Gerät
+  gesehen. Die Erkennung meldet nur den Fall „Tabelle zu alt“; ist sie zu
+  neu, kommen die zusätzlichen Kennungen nie an, und Ausbleiben ist kein
+  Befund.
+* **Langzeitverhalten** — Speicher und Verbindungsabbrüche über Tage — ist
+  nicht beobachtet.
+
+**Wer ein ISM8 hat, kann hier mehr beitragen als jeder weitere Prüfstand.**
+Der Reiter *Test* zeigt siebzehn Selbstprüfungen und die empfangenen Werte;
+ein Bildschirmfoto davon, zusammen mit Firmwarestand und Heizungstyp, genügt
+für eine Rückmeldung:
+
+    https://github.com/timanders22/LoxBerry-Plugin-WOLF-ISM-NG/issues
+
+Besonders wertvoll: eine Störcode-Zuordnung aus der Wolf-Dokumentation, und
+ob der Vollabzug an einem echten Gerät etwas auslöst.
+
 ## Umstieg auf 3.0.0 — bitte vor dem Update lesen
 
 > **Diese Fassung heißt anders und wird deshalb nicht als Update angeboten.**
@@ -272,6 +530,8 @@ Das Format der Konfigurationsdatei bleibt bewusst wie bisher (`schlüssel wert`,
 durch Leerzeichen getrennt), damit `wolf_ism8i.pl`, `daemon` und
 `postupgrade.sh` ohne Anpassung weiterlesen.
 
-**Wichtig zum Dateiformat:** `loadConfig()` überspringt jede Zeile, die
-irgendwo ein `#` enthält. Kommentare dürfen deshalb nur auf eigenen Zeilen
-stehen, niemals hinter einem Wert.
+**Wichtig zum Dateiformat:** `loadConfig()` überspringt seit 2.5.2 nur noch
+Zeilen, die **mit** einem `#` beginnen. Dieser Absatz beschrieb bis 3.0.7 noch
+die alte Regel — im selben README, in dem die Änderung weiter oben steht.
+Kommentare hinter einem Wert bleiben trotzdem unzulässig: die Zeile hätte dann
+drei Felder statt zwei, und der Server verwirft sie.

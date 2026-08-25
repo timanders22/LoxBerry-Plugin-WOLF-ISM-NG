@@ -39,6 +39,265 @@ function wi_zeilen($praefix, $von, $bis)
     return implode("\n", $z);
 }
 
+/* ==================================================================
+ * Die Selbstpruefung (V5)
+ *
+ * Je Zeile eine Frage mit Haken, Kreuz oder Strich. Drei Ausgaenge, nicht
+ * zwei: der Strich heisst "hier war nichts zu messen" und zaehlt in KEINER
+ * Zusammenfassung als bestanden.
+ *
+ * Und jede Zeile, die ueber eine Menge urteilt, prueft zuerst, ob die Menge
+ * leer ist. "Alle 0 von 0 sind in Ordnung" ist kein Haken - das ist die
+ * Fehlerklasse, die in den Hausregeln als stille Falschaussage gefuehrt wird.
+ *
+ * Rueckgabe: Liste aus array(1|0|-1, Frage, Antwort)
+ * ================================================================== */
+function wi_pruefzeilen($cfg)
+{
+    $z = array();
+    $p = wi_paths();
+    $zu = wi_zustand();
+    $fw = wi_cfg($cfg, 'fw_version', '1.8');
+    $dps = wi_datenpunkte($fw);
+
+    // --- Die Ursache steht VOR der Wirkung -------------------------------
+    $an = wi_cfg($cfg, 'enable', '0') === '1';
+    $z[] = array($an ? 1 : 0, wi_t('PZ.EIN'),
+                 $an ? wi_t('PZ.EIN_JA') : wi_t('PZ.EIN_NEIN'));
+
+    $wd = wi_server_pid();
+    $z[] = array($wd ? 1 : 0, wi_t('PZ.WATCHDOG'),
+                 $wd ? sprintf(wi_t('PZ.PID'), $wd) : wi_t('PZ.LAEUFT_NICHT'));
+
+    $sv = wi_ism8i_pid();
+    $z[] = array($sv ? 1 : 0, wi_t('PZ.MODUL'),
+                 $sv ? sprintf(wi_t('PZ.PID'), $sv) : wi_t('PZ.LAEUFT_NICHT'));
+
+    // --- Perl-Module ------------------------------------------------------
+    $module = array('List::MoreUtils', 'IO::Socket::Multicast', 'Math::Round',
+                    'Net::MQTT::Simple', 'HTML::Entities', 'IO::Select');
+    $fehlt = array();
+    foreach ($module as $m) {
+        if (wi_sh('perl -M' . escapeshellarg($m) . ' -e 1 2>&1') !== '') {
+            $fehlt[] = $m;
+        }
+    }
+    $z[] = array($fehlt ? 0 : 1, wi_t('PZ.MODULE'),
+                 $fehlt ? sprintf(wi_t('PZ.MODULE_FEHLT'), implode(', ', $fehlt))
+                        : sprintf(wi_t('PZ.MODULE_OK'), count($module)));
+
+    // --- Datenpunkttabelle ------------------------------------------------
+    $z[] = array($dps ? 1 : 0, wi_t('PZ.TABELLE'),
+                 $dps ? sprintf(wi_t('PZ.TABELLE_OK'), count($dps), $fw)
+                      : sprintf(wi_t('PZ.TABELLE_FEHLT'), $fw));
+
+    // --- Konfiguration vollstaendig? --------------------------------------
+    $roh = is_file($p['config']) ? (string) @file_get_contents($p['config']) : '';
+    $vorhanden = array();
+    foreach (preg_split('/\R/', $roh) as $zeile) {
+        $zeile = trim($zeile);
+        if ($zeile === '' || $zeile[0] === '#') { continue; }
+        $f = preg_split('/\s+/', $zeile);
+        if (count($f) === 2) { $vorhanden[strtolower($f[0])] = true; }
+    }
+    $soll = array_keys(wi_defaults());
+    $lueck = array();
+    foreach ($soll as $k) {
+        if (!isset($vorhanden[$k])) { $lueck[] = $k; }
+    }
+    if ($roh === '') {
+        $z[] = array(0, wi_t('PZ.KONFIG'), sprintf(wi_t('PZ.KONFIG_FEHLT'), $p['config']));
+    } else {
+        $z[] = array($lueck ? 0 : 1, wi_t('PZ.KONFIG'),
+                     $lueck ? sprintf(wi_t('PZ.KONFIG_LUECKE'), implode(', ', $lueck))
+                            : sprintf(wi_t('PZ.KONFIG_OK'), count($soll)));
+    }
+
+    // --- Das Zustandsabbild ----------------------------------------------
+    if ($zu === null) {
+        $z[] = array(-1, wi_t('PZ.ABBILD'), wi_t('PZ.ABBILD_KEINS'));
+    } else {
+        $alt = wi_zustand_alter();
+        $frisch = ($alt >= 0 && $alt < 900);
+        $z[] = array($frisch ? 1 : 0, wi_t('PZ.ABBILD'),
+                     sprintf(wi_t('PZ.ABBILD_ALTER'), wi_alter_text($alt)));
+    }
+
+    // --- Hat das ISM8 je verbunden? ---------------------------------------
+    if ($zu === null) {
+        $z[] = array(-1, wi_t('PZ.VERBUNDEN'), wi_t('PZ.OHNE_ABBILD'));
+    } else {
+        $v = isset($zu['zaehler']['verbindungen']) ? (int) $zu['zaehler']['verbindungen'] : 0;
+        $z[] = array($v > 0 ? 1 : 0, wi_t('PZ.VERBUNDEN'),
+                     $v > 0 ? sprintf(wi_t('PZ.VERBUNDEN_JA'), $v, wi_e(isset($zu['ism8_ip']) ? $zu['ism8_ip'] : '?'))
+                            : wi_t('PZ.VERBUNDEN_NIE'));
+    }
+
+    // --- Kommen Werte an? Erst pruefen, ob die Menge leer ist. ------------
+    $anz = ($zu !== null && isset($zu['werte'])) ? count($zu['werte']) : 0;
+    if ($zu === null) {
+        $z[] = array(-1, wi_t('PZ.WERTE'), wi_t('PZ.OHNE_ABBILD'));
+    } elseif ($anz === 0) {
+        $z[] = array(0, wi_t('PZ.WERTE'), wi_t('PZ.WERTE_KEINE'));
+    } else {
+        $z[] = array(1, wi_t('PZ.WERTE'), sprintf(wi_t('PZ.WERTE_JA'), $anz, count($dps)));
+    }
+
+    // --- Firmware-Plausibilitaet (V4) -------------------------------------
+    $fv = wi_fw_verdacht();
+    if ($zu === null) {
+        $z[] = array(-1, wi_t('PZ.FW'), wi_t('PZ.OHNE_ABBILD'));
+    } elseif ($fv === null) {
+        // Ein Haken hier heisst NICHT "die Firmware stimmt" - er heisst
+        // "nichts spricht dagegen". Der umgekehrte Fall (Tabelle zu neu) ist
+        // von hier aus nicht erkennbar, und das steht auch da.
+        $z[] = array(1, wi_t('PZ.FW'), sprintf(wi_t('PZ.FW_OK'), $fw));
+    } else {
+        $z[] = array(0, wi_t('PZ.FW'),
+            $fv['fw'] !== ''
+                ? sprintf(wi_t('PZ.FW_VERDACHT'), $fv['anzahl'], $fv['min'], $fv['max'], $fv['fw'], $fw)
+                : sprintf(wi_t('PZ.FW_UNBEKANNT'), $fv['anzahl'], $fv['min'], $fv['max']));
+    }
+
+    // --- Ausfallerkennung --------------------------------------------------
+    $hz = (int) wi_cfg($cfg, 'herzschlag', '60');
+    $to = wi_cfg($cfg, 'online_timeout', '-1');
+    $z[] = array($hz > 0 ? 1 : 0, wi_t('PZ.HERZ'),
+                 $hz > 0 ? sprintf(wi_t('PZ.HERZ_JA'), $hz) : wi_t('PZ.HERZ_AUS'));
+    $z[] = array(((string) $to === '-1' || (int) $to <= 0) ? 0 : 1, wi_t('PZ.AUSFALL'),
+                 ((string) $to === '-1' || (int) $to <= 0)
+                    ? wi_t('PZ.AUSFALL_AUS') : sprintf(wi_t('PZ.AUSFALL_JA'), (int) $to));
+
+    // --- MQTT --------------------------------------------------------------
+    $mq = wi_cfg($cfg, 'mqtt', '0') === '1';
+    $gw = wi_gateway_info();
+    if (!$mq) {
+        $z[] = array(-1, wi_t('PZ.MQTT'), wi_t('PZ.MQTT_AUS'));
+    } elseif ($gw === null) {
+        $z[] = array(0, wi_t('PZ.MQTT'), wi_t('PZ.MQTT_KEIN_GW'));
+    } else {
+        $z[] = array($gw['autostart'] ? 1 : 0, wi_t('PZ.MQTT'),
+                     $gw['autostart'] ? sprintf(wi_t('PZ.MQTT_OK'), $gw['fassung'] > 0 ? $gw['fassung'] : '?')
+                                      : wi_t('PZ.MQTT_KEIN_AUTOSTART'));
+    }
+
+    // --- Der eigene Cron-Eintrag (V10) -------------------------------------
+    $cron = $p['home'] ? $p['home'] . '/system/cron/cron.05min/' . $p['plugin'] : '';
+    if (!$p['home']) {
+        $z[] = array(-1, wi_t('PZ.CRON'), wi_t('PZ.CRON_UNBEKANNT'));
+    } else {
+        $da = is_file($cron);
+        $z[] = array($da ? 1 : 0, wi_t('PZ.CRON'),
+                     $da ? sprintf(wi_t('PZ.CRON_JA'), $cron) : sprintf(wi_t('PZ.CRON_NEIN'), $cron));
+    }
+
+    // --- Die erzeugten Vorlagen -------------------------------------------
+    list($ok, $txt) = wi_vorlagen_pruefen($cfg);
+    $z[] = array($ok ? 1 : 0, wi_t('PZ.VORLAGEN'), $txt);
+
+    // --- Reiterleiste, Bereiche und Positivliste gegeneinander -------------
+    list($ok2, $txt2) = wi_reiter_pruefen();
+    $z[] = array($ok2 ? 1 : 0, wi_t('PZ.REITER'), $txt2);
+
+    // --- Betriebsart-Tabellen gegen das Perl ------------------------------
+    list($ok3, $txt3) = wi_arten_pruefen($fw);
+    $z[] = array($ok3 === null ? -1 : ($ok3 ? 1 : 0), wi_t('PZ.ARTEN'), $txt3);
+
+    return $z;
+}
+
+/** Alle vier Vorlagen erzeugen und durch simplexml_load_string schicken. */
+function wi_vorlagen_pruefen($cfg)
+{
+    $dps = wi_datenpunkte(wi_cfg($cfg, 'fw_version', '1.8'));
+    if (!$dps) {
+        return array(false, wi_t('PZ.VORLAGEN_KEINE_DP'));
+    }
+    $geraete = wi_geraete($dps);
+    $eins = array($geraete[0]);
+    $schlecht = array();
+    $gut = 0;
+    $versucht = 0;
+    foreach (array('udp_in', 'tcp_out', 'mqtt_in', 'mqtt_out') as $art) {
+        list($name, $inhalt, $anz) = wi_vorlage($art, $cfg, $eins, null);
+        if ($inhalt === '') {
+            continue;   // fuer dieses Geraet gibt es die Bauform nicht
+        }
+        $versucht++;
+        $alt = libxml_use_internal_errors(true);
+        $x = simplexml_load_string($inhalt);
+        libxml_clear_errors();
+        libxml_use_internal_errors($alt);
+        if ($x === false) { $schlecht[] = $art; } else { $gut++; }
+    }
+    if ($gut === 0) {
+        return array(false, wi_t('PZ.VORLAGEN_NICHTS'));
+    }
+    return array(!$schlecht,
+        $schlecht ? sprintf(wi_t('PZ.VORLAGEN_KAPUTT'), implode(', ', $schlecht))
+                  : sprintf(wi_t('PZ.VORLAGEN_OK'), $gut, $versucht));
+}
+
+/**
+ * Reiterleiste, Bereiche und Positivliste gegeneinander zaehlen.
+ *
+ * Drei Stellen muessen zusammenpassen, und keine Prüfkette liest sie
+ * gegeneinander - hausstandard_pruefen.py sieht nur, ob die Zahlen gleich
+ * sind, nicht ob ein Reiter fehlt, den es geben muesste.
+ */
+function wi_reiter_pruefen()
+{
+    $q = (string) @file_get_contents(__DIR__ . '/index.php');
+    if ($q === '') {
+        return array(false, wi_t('PZ.REITER_UNLESBAR'));
+    }
+    preg_match_all('/data-pane="(tab-[a-z0-9]+)"/', $q, $a);
+    preg_match_all('/class="sm-pane[^"]*"[^>]*id="(tab-[a-z0-9]+)"/', $q, $b);
+    preg_match('/\^tab-\(([a-z0-9|]+)\)/', $q, $c);
+    $leiste = array_unique($a[1]);
+    $bereiche = array_unique($b[1]);
+    $liste = isset($c[1]) ? array_map(function ($x) { return 'tab-' . $x; },
+                                      explode('|', $c[1])) : array();
+    sort($leiste); sort($bereiche); sort($liste);
+    $gleich = ($leiste === $bereiche && $leiste === $liste && count($leiste) > 0);
+    return array($gleich, sprintf(wi_t('PZ.REITER_ZAHL'),
+        count($leiste), count($bereiche), count($liste)));
+}
+
+/**
+ * Die Betriebsart-Tabellen der Oberflaeche gegen die im Perl.
+ *
+ * Sie stehen zwangslaeufig zweimal da - ueber die Sprachgrenze hinweg gibt es
+ * keine gemeinsame Funktion. Diese Zeile stellt sicher, dass sie nicht
+ * auseinanderlaufen: gezaehlt werden die Klartexte im Perl.
+ */
+function wi_arten_pruefen($fw)
+{
+    $pl = wi_paths()['bindir'] . '/wolf_ism8i.pl';
+    if (!is_file($pl)) {
+        $pl = dirname(dirname(__DIR__)) . '/bin/wolf_ism8i.pl';
+    }
+    if (!is_file($pl)) {
+        return array(null, wi_t('PZ.ARTEN_KEIN_PERL'));
+    }
+    $q = (string) @file_get_contents($pl);
+    $eigene = array();
+    foreach (wi_betriebsarten($fw) as $gruppen) {
+        foreach ($gruppen as $werte) {
+            foreach ($werte as $txt) {
+                if ($txt !== '-') { $eigene[$txt] = true; }
+            }
+        }
+    }
+    $fehlt = array();
+    foreach (array_keys($eigene) as $txt) {
+        if (strpos($q, '"' . $txt . '"') === false) { $fehlt[] = $txt; }
+    }
+    return array(!$fehlt, $fehlt
+        ? sprintf(wi_t('PZ.ARTEN_ABWEICHUNG'), count($fehlt), implode(', ', array_slice($fehlt, 0, 3)))
+        : sprintf(wi_t('PZ.ARTEN_OK'), count($eigene)));
+}
+
 function wi_test_ausfuehren($was)
 {
     $p = wi_paths();
@@ -97,8 +356,18 @@ function wi_test_ausfuehren($was)
             $t .= sprintf(wi_t('PRUEF.TH_MQTT'),
                 wi_cfg($cfg, 'mqtt', '0') === '1' ? wi_t('PRUEF.EIN') : wi_t('PRUEF.AUS_GROSS')) . "\n\n";
             $t .= "wolf_ng/online\n";
+            // Uhrzeit- und Datumstypen bleiben weg: der Dienst
+            // veroeffentlicht sie nicht (wolf_ism8i.pl, @ignored_types).
+            // Bis 3.0.7 standen sie in dieser Liste - in Firmware 1.9 acht
+            // Themen, die es nie gibt. Wer die Liste als Sollzustand nahm,
+            // suchte acht Themen vergeblich. Die MQTT-Eingangsvorlage
+            // filtert sie seit jeher richtig heraus.
+            $zeit_typen = array('DPT_TimeOfDay', 'DPT_Date');
             foreach ($dps as $d) {
                 if (strpos($d['io'], 'Out') === false) {
+                    continue;
+                }
+                if (in_array($d['dpt'], $zeit_typen, true)) {
                     continue;
                 }
                 $t .= wi_topic($d) . "\n";
@@ -216,6 +485,49 @@ function wi_test_ausfuehren($was)
                 : wi_t('PRUEF.H_ANGEHALTEN') . "\n\n" . wi_zeilen('PRUEF.H_HINWEIS_', 1, 2);
             return array(wi_t('PRUEF.T_STOP'), $t);
 
+        case 'vorlagenprobe':
+            list($ok, $txt) = wi_vorlagen_pruefen($cfg);
+            $t = $txt . "\n\n";
+            $geraete = wi_geraete(wi_datenpunkte(wi_cfg($cfg, 'fw_version', '1.8')));
+            if ($geraete) {
+                list($n, $inhalt, $anz) = wi_vorlage('mqtt_in', $cfg, array($geraete[0]), null);
+                $t .= sprintf(wi_t('PRUEF.VP_BEISPIEL'), $n, $anz) . "\n\n";
+                $zeilen = preg_split('/\R/', $inhalt);
+                $t .= implode("\n", array_slice($zeilen, 0, 6));
+                if (count($zeilen) > 6) {
+                    $t .= "\n" . sprintf(wi_t('PRUEF.VP_WEITERE'), count($zeilen) - 6);
+                }
+            }
+            return array(wi_t('PRUEF.T_VORLAGEN'), $t);
+
+        case 'schreibprobe':
+        case 'schreibernst':
+            $id = isset($_POST['sp_id']) ? (string) $_POST['sp_id'] : '';
+            $wert = isset($_POST['sp_wert']) ? (string) $_POST['sp_wert'] : '';
+            list($ok, $txt) = wi_schreibprobe($cfg, $id, $wert, $was === 'schreibernst');
+            return array($was === 'schreibernst' ? wi_t('PRUEF.T_SP_ERNST')
+                                                 : wi_t('PRUEF.T_SP_TROCKEN'), $txt);
+
+        case 'aufraeumen_probe':
+        case 'aufraeumen':
+            return wi_aufraeumen($cfg, $was === 'aufraeumen');
+
+        case 'dplog_leeren':
+            $datei = wi_log_file('datapoints');
+            if ($datei === '') { $datei = wi_log_file('wolf'); }
+            if ($datei === '' || !is_file($datei)) {
+                return array(wi_t('PRUEF.T_DPLOG'), wi_t('PRUEF.DL_KEINE'));
+            }
+            $gr = (int) @filesize($datei);
+            if (@file_put_contents($datei, '') === false) {
+                return array(wi_t('PRUEF.T_DPLOG'), sprintf(wi_t('PRUEF.DL_FEHLER'), $datei));
+            }
+            clearstatcache(true, $datei);
+            return array(wi_t('PRUEF.T_DPLOG'),
+                sprintf(wi_t('PRUEF.DL_OK'), $datei,
+                        number_format($gr / 1024, 1, ',', '.'),
+                        (int) @filesize($datei)));
+
         case 'comtest':
             $skript = $p['bindir'] . '/ism8i_comtest.pl';
             if (!is_file($skript)) {
@@ -235,4 +547,51 @@ function wi_test_ausfuehren($was)
     }
 
     return array(wi_t('PRUEF.T_UNBEKANNT'), wi_t('PRUEF.UNBEKANNT'));
+}
+
+/**
+ * Retained gebliebene Themen aufraeumen (V13).
+ *
+ * Geschickt wird ueber den UDP-Eingang des MQTT-Gateways: "retain <thema> "
+ * mit LEERER Nutzlast loescht im MQTT-Protokoll einen retained-Wert.
+ *
+ * NICHT GEMESSEN und deshalb ausdruecklich gesagt: ob das Gateway eine leere
+ * Nutzlast so weiterreicht, ist an einem Broker zu pruefen. Der Trockenlauf
+ * schickt NICHTS und zeigt nur, was hinausginge - er ist die Stufe davor.
+ */
+function wi_aufraeumen($cfg, $ernst)
+{
+    $themen = wi_alle_themen($cfg);
+    $port = wi_mqtt_udpinport();
+    $kopf = sprintf(wi_t('PRUEF.AR_KOPF'), count($themen)) . "\n";
+
+    if (!$ernst) {
+        $kopf .= wi_t('PRUEF.AR_TROCKEN') . "\n\n";
+        $zeig = array_slice($themen, 0, 40);
+        $kopf .= implode("\n", $zeig);
+        if (count($themen) > 40) {
+            $kopf .= "\n" . sprintf(wi_t('PRUEF.AR_WEITERE'), count($themen) - 40);
+        }
+        return array(wi_t('PRUEF.T_AUFRAEUMEN'), $kopf);
+    }
+
+    if (!$port) {
+        return array(wi_t('PRUEF.T_AUFRAEUMEN'), $kopf . wi_t('PRUEF.AR_KEIN_PORT'));
+    }
+    $sock = @fsockopen('udp://127.0.0.1', (int) $port, $nr, $txt, 3);
+    if (!$sock) {
+        return array(wi_t('PRUEF.T_AUFRAEUMEN'),
+                     $kopf . sprintf(wi_t('PRUEF.AR_KEIN_SOCKET'), (int) $port, wi_e($txt)));
+    }
+    $n = 0;
+    foreach ($themen as $th) {
+        if (@fwrite($sock, 'retain ' . $th . " \n") !== false) {
+            $n++;
+        }
+        usleep(2000);
+    }
+    fclose($sock);
+    return array(wi_t('PRUEF.T_AUFRAEUMEN'),
+        $kopf . sprintf(wi_t('PRUEF.AR_ERNST'), $n, (int) $port) . "\n\n"
+              . wi_t('PRUEF.AR_VORBEHALT'));
 }

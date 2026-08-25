@@ -44,6 +44,23 @@ wolf_beenden() {
     done
 }
 
+# Laeuft ein Prozess zu diesem Skriptpfad? Gleiche Erkennung wie
+# wolf_beenden, nur ohne zu toeten.
+wolf_laeuft() {
+    SKRIPT="$1"
+    for D in /proc/[0-9]*; do
+        [ -r "$D/cmdline" ] || continue
+        ARGS=$(tr '\0' '\n' < "$D/cmdline" 2>/dev/null)
+        ERSTES=$(printf '%s\n' "$ARGS" | head -1)
+        if [ "$ERSTES" = "$SKRIPT" ] ||
+           { case "$(basename "$ERSTES")" in perl|bash|sh|dash) true ;; *) false ;; esac &&
+             printf '%s\n' "$ARGS" | grep -qxF "$SKRIPT"; }; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Carry out specific functions when asked to by the system
 case "$1" in
   'start')
@@ -55,7 +72,16 @@ case "$1" in
     echo "Stopping Wolf ISM8i server"
     wolf_beenden "${BINPATH}/wolf_watchdog.sh"
     wolf_beenden "${BINPATH}/wolf_ism8i.pl"
-    RETVAL=$?
+    # RETVAL=$? nach wolf_beenden trug keine Aussage - die Funktion endet
+    # immer erfolgreich, stop meldete also IMMER Erfolg. Gemessen wird
+    # jetzt die WIRKUNG.
+    sleep 1
+    if wolf_laeuft "${BINPATH}/wolf_watchdog.sh" || wolf_laeuft "${BINPATH}/wolf_ism8i.pl"; then
+        echo "WARNUNG: es laeuft noch ein Prozess."
+        RETVAL=1
+    else
+        RETVAL=0
+    fi
     ;;
   'restart')
     echo "Restarting Wolf ISM8i server"
@@ -67,19 +93,24 @@ case "$1" in
     RETVAL=$?
     ;;
   'status')
-    # "ps -ef | grep" zaehlt sich selbst mit, wenn das grep -v grep einmal
-    # nicht greift. Argumentweise ueber /proc ist eindeutig.
-    cnt=0
-    for D in /proc/[0-9]*; do
-        [ -r "$D/cmdline" ] || continue
-        if tr '\0' '\n' < "$D/cmdline" 2>/dev/null | head -1 | grep -qxF "${BINPATH}/wolf_watchdog.sh"; then
-            cnt=1
-        fi
-    done
-    if [ "$cnt" -eq "0" ] ; then
-        echo "Wolf ISM8i server is not running"
+    # status hat bis 3.0.7 nur den Watchdog angesehen. Der kann laufen,
+    # waehrend das Auswertungsmodul in seiner Neustartschleife haengt -
+    # die Meldung "is running" war dann eine halbe Wahrheit.
+    W=0; M=0
+    wolf_laeuft "${BINPATH}/wolf_watchdog.sh" && W=1
+    wolf_laeuft "${BINPATH}/wolf_ism8i.pl"    && M=1
+    if [ "$W" -eq 1 ] && [ "$M" -eq 1 ]; then
+        echo "Wolf ISM8i server is running (Watchdog und Auswertungsmodul)"
+        RETVAL=0
+    elif [ "$W" -eq 1 ]; then
+        echo "Wolf ISM8i server: Watchdog laeuft, Auswertungsmodul NICHT"
+        RETVAL=1
+    elif [ "$M" -eq 1 ]; then
+        echo "Wolf ISM8i server: Auswertungsmodul laeuft ohne Watchdog"
+        RETVAL=1
     else
-        echo "Wolf ISM8i server is running"
+        echo "Wolf ISM8i server is not running"
+        RETVAL=3
     fi
     ;;
   *)
