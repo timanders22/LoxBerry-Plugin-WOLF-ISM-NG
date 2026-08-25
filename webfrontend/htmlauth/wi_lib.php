@@ -238,6 +238,23 @@ function wi_defaults()
         'mqtt'           => '1',
         'pull_on_write'  => '0',
         'online_timeout' => '-1',
+        /* Bis 3.0.8 fehlten die folgenden drei hier - und wi_config_write()
+         * schreibt NUR, was in dieser Liste steht. Wirkung, am 25.08.2026
+         * an einem nachgebauten LoxBerry gemessen: ein Speichervorgang
+         * loeschte sie aus der Konfiguration, der Dienst fiel auf seine
+         * eigenen Vorgaben zurueck, und mit dem Praefix wanderten SAEMTLICHE
+         * MQTT-Themen. Die Oberflaeche bot die Felder an, das Speichern
+         * verwarf sie - lautlos.
+         *
+         * Die Werte sind die des Dienstes (bin/wolf_ism8i.pl, %hash), damit
+         * beide Seiten dasselbe meinen. */
+        'praefix'        => 'wolf_ng',
+        'herzschlag'     => '60',
+        'abgleich_takt'  => '0',
+        /* Welche Stoercodetabelle gilt. Leer heisst KEINE - siehe
+         * wi_stoercode_tabellen(). Eine falsche Tabelle waere schlimmer
+         * als gar keine, deshalb wird nicht geraten. */
+        'stoercodes'     => '',
     );
 }
 
@@ -595,6 +612,71 @@ function wi_art_tabelle($d, $fw)
  * seines Geraets hat, traegt sie ein; die Datei ueberlebt ein Update, weil
  * sie unter config/ liegt.
  * ================================================================== */
+/**
+ * Die mitgelieferten Stoercodetabellen.
+ *
+ * Rueckgabe: schluessel => array(Anzeigename, Pfad, Zahl der Zeilen)
+ *
+ * Der Schluessel ist der Namensbestandteil hinter "wolf_stoercodes_", der
+ * Anzeigename steht in der zweiten Kopfzeile der Datei ("# Geraete: ...").
+ * Beides wird GELESEN und nicht im Code gefuehrt - sonst laufen Dateibestand
+ * und Auswahlfeld auseinander, sobald eine Tabelle dazukommt.
+ */
+function wi_stoercode_tabellen()
+{
+    static $t = null;
+    if ($t !== null) {
+        return $t;
+    }
+    $t = array();
+    $orte = array(
+        wi_paths()['bindir'],
+        dirname(dirname(__DIR__)) . '/bin',
+    );
+    foreach ($orte as $ort) {
+        if (!is_dir($ort)) {
+            continue;
+        }
+        $treffer = @glob($ort . '/wolf_stoercodes_*.csv');
+        if (!is_array($treffer)) {
+            continue;
+        }
+        foreach ($treffer as $f) {
+            $s = basename($f, '.csv');
+            $s = substr($s, strlen('wolf_stoercodes_'));
+            if ($s === '' || isset($t[$s])) {
+                continue;
+            }
+            $name = $s;
+            $n = 0;
+            foreach (preg_split('/\R/', (string) @file_get_contents($f)) as $z) {
+                $z = trim($z);
+                if ($z === '') {
+                    continue;
+                }
+                if ($z[0] === '#') {
+                    if (strpos($z, '# Geraete:') === 0) {
+                        $name = trim(substr($z, strlen('# Geraete:')));
+                    }
+                    continue;
+                }
+                $p = explode(';', $z, 2);
+                if (count($p) === 2 && ctype_digit(trim($p[0]))) {
+                    $n++;
+                }
+            }
+            if ($n > 0) {
+                $t[$s] = array($name, $f, $n);
+            }
+        }
+        if ($t) {
+            break;
+        }
+    }
+    ksort($t);
+    return $t;
+}
+
 function wi_stoercodes()
 {
     static $t = null;
@@ -602,11 +684,30 @@ function wi_stoercodes()
         return $t;
     }
     $t = array();
-    $kandidaten = array(
-        dirname(wi_paths()['config']) . '/wolf_stoercodes.csv',
-        wi_paths()['bindir'] . '/wolf_stoercodes.csv',
-        dirname(dirname(__DIR__)) . '/bin/wolf_stoercodes.csv',
-    );
+
+    /* Reihenfolge, und jeder Schritt hat einen Grund:
+     *
+     *   1. Die eigene Datei des Anwenders unter config/. Sie schlaegt alles -
+     *      wer seine Tabelle selbst pflegt, will nicht von einem Update
+     *      ueberstimmt werden. Sie ueberlebt ein Update auch.
+     *   2. Die GEWAEHLTE mitgelieferte Tabelle. Ist nichts gewaehlt, wird
+     *      nichts geraten: der Datenpunkt 372 bedeutet je nach Waermeerzeuger
+     *      Verschiedenes (gemessen: von 72 Nummern sind 12 mehrdeutig, und
+     *      Code 116 heisst am Kessel etwas anderes als an der Waermepumpe).
+     *      Eine falsche Tabelle ist schlimmer als gar keine.
+     *   3. bin/wolf_stoercodes.csv - die leere Beispieldatei. Sie liefert
+     *      nichts und dient nur als Formbeschreibung.
+     */
+    $wahl = wi_cfg(wi_config_read(), 'stoercodes', '');
+    $kandidaten = array(dirname(wi_paths()['config']) . '/wolf_stoercodes.csv');
+    if ($wahl !== '') {
+        $tabellen = wi_stoercode_tabellen();
+        if (isset($tabellen[$wahl])) {
+            $kandidaten[] = $tabellen[$wahl][1];
+        }
+    }
+    $kandidaten[] = wi_paths()['bindir'] . '/wolf_stoercodes.csv';
+    $kandidaten[] = dirname(dirname(__DIR__)) . '/bin/wolf_stoercodes.csv';
     foreach ($kandidaten as $f) {
         if (!is_file($f)) {
             continue;
@@ -626,6 +727,34 @@ function wi_stoercodes()
         }
     }
     return $t;
+}
+
+/**
+ * Woher die geltende Stoercodetabelle stammt - fuer die Anzeige.
+ * Rueckgabe: array(Herkunft, Anzeigename, Zahl der Zeilen)
+ * Herkunft ist 'eigen', 'mitgeliefert' oder 'keine'.
+ */
+function wi_stoercode_herkunft()
+{
+    $eigen = dirname(wi_paths()['config']) . '/wolf_stoercodes.csv';
+    $n = count(wi_stoercodes());
+    if (is_file($eigen) && $n > 0) {
+        /* Nur dann ist die eigene Datei auch WIRKSAM: eine vorhandene, aber
+         * leere Datei laesst wi_stoercodes() weitersuchen. */
+        $roh = (string) @file_get_contents($eigen);
+        foreach (preg_split('/\R/', $roh) as $z) {
+            $z = trim($z);
+            if ($z !== '' && $z[0] !== '#' && strpos($z, ';') !== false) {
+                return array('eigen', $eigen, $n);
+            }
+        }
+    }
+    $wahl = wi_cfg(wi_config_read(), 'stoercodes', '');
+    $tabellen = wi_stoercode_tabellen();
+    if ($wahl !== '' && isset($tabellen[$wahl])) {
+        return array('mitgeliefert', $tabellen[$wahl][0], $n);
+    }
+    return array('keine', '', $n);
 }
 
 /** Klartext zu einem Stoercode, oder '' wenn die Tabelle ihn nicht kennt. */

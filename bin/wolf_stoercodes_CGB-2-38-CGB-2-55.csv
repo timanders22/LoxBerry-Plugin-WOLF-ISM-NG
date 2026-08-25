@@ -1,0 +1,45 @@
+# Wolf Stoercodes - Gas-Brennwerttherme
+# Geraete: CGB-2-38, CGB-2-55
+#
+# Ausgelesen aus der WOLF-Betriebsanleitung:
+#   CGB-2-38___CGB-2-55_Betriebsanleitung_fuer_die_Fachkraft_07_2025.pdf
+#
+# Je Zeile: Nummer;Klartext. Zeilen mit Doppelkreuz werden uebersprungen.
+#
+1;STB Übertemperatur
+2;TB Übertemperatur
+3;dT - eSTB Drift
+4;Keine Flammbildung
+5;Flammenausfall
+6;Temperaturwächter Übertemperatur
+7;Abgasfühler Übertemperatur
+8;Abgasklappe / Zuluftklappe schaltet nicht
+10;eSTB - Fühler defekt
+11;Flammenvortäuschung
+12;Kesselfühler defekt
+13;Abgasfühler defekt
+14;Speicherfühler SF defekt
+15;Außentemperaturfühler defekt
+16;Rücklauftemperaturfühler defekt
+20;Relaistest GKV
+24;Gebläse Drehzahl <
+26;Gebläse Drehzahl >
+30;CRC Feuerungsautomat
+32;Fehler in 23 VAC-Versorgung
+35;BCC nicht korrekt
+36;CRC BCC-ID fehlerhaft in der BCC
+37;Falsche BCC
+38;BCC update nötig
+39;BCC Systemfehler
+41;Strömungsüberwachung (Fühler überprüfen)
+52;max. Speicherladezeit
+53;IO - Regelabweichung
+60;Stau im Siphon
+78;Fehler Sammlerfühler
+90;Kommunikation FA
+96;Reset
+98;Flammenverstärker
+99;Systemfehler Feuerungsautomat
+107;Druck HK
+116;Externe Störung Eingang E1
+225;Fehlercode unbekannt

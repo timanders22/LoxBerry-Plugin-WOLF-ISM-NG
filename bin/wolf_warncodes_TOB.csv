@@ -1,0 +1,24 @@
+# Wolf Warncodes - OEl-Brennwertkessel
+# Geraete: TOB
+#
+# Ausgelesen aus der WOLF-Betriebsanleitung:
+#   TOB___TS___TR_OElbrennwertkessel_Betriebsanleitung_fuer_die_Fachkraft_Wartungsanleitung_02_2026.pdf
+#
+# Je Zeile: Nummer;Klartext. Zeilen mit Doppelkreuz werden uebersprungen.
+#
+# ACHTUNG: Das sind WARNmeldungen. Der Datenpunkt 372
+# heisst "Zuletzt aktiver STOERcode" - fuer ihn ist die
+# Datei wolf_stoercodes_*.csv zustaendig, nicht diese.
+#
+4;Keine Flammbildung
+5;Flammenausfall
+22;Differenzdrucksensor spricht nicht an
+23;Differenzdrucksensor fällt nicht ab
+24;Fehler Drehzahl Gebläse
+26;Fehler Gebläse
+66;Fehler Ölpumpe
+67;Ölpumpendrehzahl
+83;Öldruck erreicht Ruhewert nicht
+84;Drehzahl Ölpumpe
+86;Öldruck erreicht Zünddruck nicht
+107;Druck HK

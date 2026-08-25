@@ -60,6 +60,44 @@ function wi_pruefzeilen($cfg)
     $fw = wi_cfg($cfg, 'fw_version', '1.8');
     $dps = wi_datenpunkte($fw);
 
+    /* --- Schreibt das Speichern alles zurueck, was es gelesen hat? ------
+     *
+     * wi_config_write() schreibt AUSSCHLIESSLICH die Schluessel aus
+     * wi_defaults(). Fehlt dort einer, den die Oberflaeche anbietet, dann
+     * loescht ihn jeder Speichervorgang - lautlos. In 3.0.8 traf das
+     * praefix, herzschlag und abgleich_takt; mit dem Praefix wanderten
+     * saemtliche MQTT-Themen zurueck auf die Vorgabe.
+     *
+     * Geprueft wird gegen die Konfiguration, wie sie GESCHRIEBEN wird: was
+     * nach einem Schreibvorgang in der Datei stuende, muss alles enthalten,
+     * was jetzt darin steht. */
+    $wi_vorgaben = wi_defaults();
+    $wi_verloren = array();
+    foreach (array_keys($cfg) as $wi_k) {
+        if (!array_key_exists($wi_k, $wi_vorgaben)) {
+            $wi_verloren[] = $wi_k;
+        }
+    }
+    $z[] = array($wi_verloren ? 0 : 1, wi_t('PZ.SCHLUESSEL'),
+                 $wi_verloren
+                     ? sprintf(wi_t('PZ.SCHLUESSEL_NEIN'), implode(', ', $wi_verloren))
+                     : sprintf(wi_t('PZ.SCHLUESSEL_JA'), count($wi_vorgaben)));
+
+    /* --- Welche Stoercodetabelle gilt? ---------------------------------
+     *
+     * Drei Ausgaenge, nicht zwei: "keine gewaehlt" ist kein Fehler, sondern
+     * der Auslieferungszustand - und es ist auch kein Erfolg. Der Strich. */
+    list($wi_sh, $wi_sn, $wi_sz) = wi_stoercode_herkunft();
+    if ($wi_sh === 'eigen') {
+        $z[] = array(1, wi_t('TEST.SC_HERKUNFT'),
+                     sprintf(wi_t('TEST.SC_EIGEN'), $wi_sn, $wi_sz));
+    } elseif ($wi_sh === 'mitgeliefert') {
+        $z[] = array(1, wi_t('TEST.SC_HERKUNFT'),
+                     sprintf(wi_t('TEST.SC_MIT'), $wi_sn, $wi_sz));
+    } else {
+        $z[] = array(-1, wi_t('TEST.SC_HERKUNFT'), wi_t('TEST.SC_KEINE'));
+    }
+
     // --- Die Ursache steht VOR der Wirkung -------------------------------
     $an = wi_cfg($cfg, 'enable', '0') === '1';
     $z[] = array($an ? 1 : 0, wi_t('PZ.EIN'),

@@ -1,0 +1,19 @@
+# Wolf Warncodes - Gas-Brennwertkessel
+# Geraete: TGB-2
+#
+# Ausgelesen aus der WOLF-Betriebsanleitung:
+#   Gasbrennwertkessel_TGB-2_TS_TR_Betriebsanleitung_fuer_die_Fachkraft_06_2025.pdf
+#
+# Je Zeile: Nummer;Klartext. Zeilen mit Doppelkreuz werden uebersprungen.
+#
+# ACHTUNG: Das sind WARNmeldungen. Der Datenpunkt 372
+# heisst "Zuletzt aktiver STOERcode" - fuer ihn ist die
+# Datei wolf_stoercodes_*.csv zustaendig, nicht diese.
+#
+1;Feuerungsautomat gewechselt
+2;Druck Heizkreis
+3;Parameter geändert
+4;Keine Flamme
+5;Flammenausfall
+24;Fehler Drehzahl Gebläse
+43;Viele Brennerstarts

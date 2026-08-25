@@ -1,0 +1,50 @@
+# Wolf Stoercodes - OEl-Brennwertkessel
+# Geraete: TOB
+#
+# Ausgelesen aus der WOLF-Betriebsanleitung:
+#   TOB___TS___TR_OElbrennwertkessel_Betriebsanleitung_fuer_die_Fachkraft_Wartungsanleitung_02_2026.pdf
+#
+# Je Zeile: Nummer;Klartext. Zeilen mit Doppelkreuz werden uebersprungen.
+#
+1;STB Übertemperatur
+4;Keine Flammbildung
+5;Flammenausfall
+6;Temperaturwächter Übertemperatur
+7;Abgasfühler Übertemperatur
+8;Abgasklappe / Zuluftklappe schaltet nicht
+11;Flammenvortäuschung
+12;Kesselfühler defekt
+13;Abgasfühler defekt
+14;Speicherfühler SF defekt
+15;Außentemperaturfühler defekt
+16;Rücklauffühler defekt
+19;Öldrucksensor defekt
+22;Differenzdrucksensor spricht nicht an
+23;Differenzdrucksensor fällt nicht ab
+24;Fehler Drehzahl Gebläse
+26;Fehler Gebläse
+27;Schichtladefühler defekt
+30;CRC Feuerungsautomat
+34;CRC BCC-ID fehlerhaft im CM-EEPROM
+35;BCC nicht korrekt
+36;CRC BCC-ID fehlerhaft in der BCC
+37;Falsche BCC
+38;BCC update nötig
+39;BCC Systemfehler
+41;Strömungsüberwachung
+42;Kondensatpumpe fördert nicht
+52;max. Speicherladezeit
+66;Fehler Ölpumpe
+67;Ölpumpendrehzahl
+78;Fehler Sammlerfühler
+83;Öldruck erreicht Ruhewert nicht
+84;Drehzahl Ölpumpe
+85;Relaistest
+86;Öldruck erreicht Zünddruck nicht
+90;Kommunikation FA
+91;Buskommunikation
+95;Prog. Mode
+96;Reset
+99;Systemfehler Feuerungsautomat
+107;Druck HK
+116;ESM (E1)

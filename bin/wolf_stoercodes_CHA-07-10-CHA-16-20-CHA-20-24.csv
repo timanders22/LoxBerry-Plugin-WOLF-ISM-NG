@@ -1,0 +1,35 @@
+# Wolf Stoercodes - Waermepumpe (HCM-4)
+# Geraete: CHA-07/10, CHA-16/20, CHA-20/24
+#
+# Ausgelesen aus der WOLF-Betriebsanleitung:
+#   CHA-07_10__SE__Monoblock-Luft___Wasser-Waermepumpe_Betriebsanleitung_fuer_die_Fachkraft_07_2026.pdf
+#   CHA-16_20-400V-M2_Monoblock-Luft___Wasser-Waermepumpe_Betriebsanleitung_fuer_die_Fachkraft_05_2026.pdf
+#   CHA-20_24-400V-M2_Monoblock-Luft___Wasser-Waermepumpe_Betriebsanleitung_fuer_die_Fachkraft_05_2026.pdf
+#
+# Je Zeile: Nummer;Klartext. Zeilen mit Doppelkreuz werden uebersprungen.
+#
+12;Kesselfühler defekt
+14;WW-Fühler defekt
+15;T_Aussen
+16;T_Rücklauf
+37;BCC n. kompatibel
+78;T_Sammler
+101;E-Heizung
+102;Netzstörung
+103;Leistungselektronik
+104;Ventilator
+105;Hochdruck Sensor
+107;Druck HK
+108;Niederdruck Sensor
+109;Hochdruck-Schalter
+110;T_Sauggas
+111;T_Heißgas
+112;T_Zuluft
+116;ESM
+118;PCB unterbrochen
+119;Abtauenergie
+120;Abtauzeit
+125;T_Kessel 2
+128;ODU
+129;Verdichter
+133;Modul nicht kompatibel

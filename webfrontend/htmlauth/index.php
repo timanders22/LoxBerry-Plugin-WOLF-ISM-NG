@@ -240,6 +240,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $neu['abgleich_takt'] = $zahl('abgleich_takt', wi_cfg($neu, 'abgleich_takt', '0'),
                                wi_t('EINST.ABGLEICH'), 0, 86400);
 
+    // V23/3.0.9: welche Stoercodetabelle gilt. Leer ist ein gueltiger Wert
+    // und heisst "keine" - der Datenpunkt 372 bedeutet je nach Waermeerzeuger
+    // Verschiedenes, und eine falsche Tabelle ist schlimmer als keine.
+    $wi_alt_sc = wi_cfg($neu, 'stoercodes', '');
+    $sc = isset($_POST['stoercodes']) ? trim((string) $_POST['stoercodes']) : $wi_alt_sc;
+    if ($sc === '' || isset(wi_stoercode_tabellen()[$sc])) {
+        $neu['stoercodes'] = $sc;
+    } else {
+        $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.SC_UNGUELTIG'),
+                                       wi_e($sc), wi_e($wi_alt_sc));
+        $neu['stoercodes'] = $wi_alt_sc;
+    }
+
     // V19: die Multicast-Gruppe ist wieder waehlbar. Bis 3.0.7 uebernahm die
     // Oberflaeche die Adresse AUSSCHLIESSLICH aus der Miniserver-Auswahl - wer
     // einmal einen Miniserver gewaehlt hatte, kam nie wieder zum Gruppenbetrieb
@@ -302,6 +315,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_mqtt'])) {
 /* ============ Daten fuer die Anzeige ============ */
 $wi_cfg = wi_config_read();
 $wi_fw = wi_cfg($wi_cfg, 'fw_version', '1.8');
+$wi_sc_wahl = wi_cfg($wi_cfg, 'stoercodes', '');
 $wi_pre = wi_cfg($wi_cfg, 'praefix', 'wolf_ng');
 $wi_dps = wi_datenpunkte($wi_fw);
 $wi_geraete = wi_geraete($wi_dps);
@@ -498,6 +512,16 @@ $wi_reiter = array(
 <?php } ?>
 </select>
 <div class="sm-small"><?= wi_t('EINST.FIRMWARE_HINT') ?></div>
+</div>
+<div>
+<label><?= wi_t('EINST.STOERTAB') ?></label>
+<select data-role="none" name="stoercodes">
+<option value=""<?= $wi_sc_wahl === '' ? ' selected' : '' ?>><?= wi_t('EINST.STOERTAB_KEINE') ?></option>
+<?php foreach (wi_stoercode_tabellen() as $wi_k => $wi_v) { ?>
+<option value="<?= wi_e($wi_k) ?>"<?= $wi_sc_wahl === $wi_k ? ' selected' : '' ?>><?= wi_e($wi_v[0]) ?> (<?= (int) $wi_v[2] ?>)</option>
+<?php } ?>
+</select>
+<div class="sm-small"><?= wi_t('EINST.STOERTAB_HINT') ?></div>
 </div>
 <div>
 <label><?= wi_t('EINST.ISM8_PORT') ?></label>

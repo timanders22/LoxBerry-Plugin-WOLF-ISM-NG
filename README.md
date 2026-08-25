@@ -23,6 +23,98 @@ Die Kette: **Dr. Mugur Dietrich** (Auswertungsmodul, 2017) → **Dominik
 Holland** ([Gagi2k/LoxBerry-Plugin-WolfIsm8](https://github.com/Gagi2k/LoxBerry-Plugin-WolfIsm8),
 Einbettung als LoxBerry-Plugin) → diese Fortführung.
 
+## Version 3.0.9 — Störcodes im Klartext, und ein stiller Fehler behoben
+
+### Zuerst der Fehler, denn er betrifft jede laufende 3.0.8
+
+**Ein Speichervorgang löschte drei Einstellungen** — `praefix`,
+`herzschlag` und `abgleich_takt`. Die Oberfläche bot die Felder an, der Dienst
+las sie, aber sie fehlten in `wi_defaults()` — und `wi_config_write()` schreibt
+ausschließlich die Schlüssel aus dieser Liste. Wer also ein eigenes
+MQTT-Präfix gesetzt hatte und danach irgendetwas anderes speicherte, verlor es:
+der Dienst fiel auf `wolf_ng` zurück, und **sämtliche MQTT-Themen wanderten
+mit**. In Loxone standen danach virtuelle Eingänge, die nie wieder einen Wert
+bekamen.
+
+Gemessen an einem nachgebauten LoxBerry, in beide Richtungen: auf 3.0.8 sind
+alle drei nach einem Speichern **fort**, auf 3.0.9 stehen sie unverändert da.
+Die Gegenprobe läuft im selben Durchgang mit `fw_version` — einem Schlüssel,
+der in `wi_defaults()` steht und deshalb auch auf 3.0.8 überlebt.
+
+**Was zu tun ist:** nach dem Update Präfix, Lebenszeichen und Vollabzug einmal
+nachsehen und neu setzen, falls sie auf der Vorgabe stehen. Der Reiter *Test*
+hat dafür eine neue Zeile: *Speichern erhält alle Einstellungen*. Sie
+vergleicht, was in der Konfiguration steht, mit dem, was ein Schreibvorgang
+zurückschreiben würde, und nennt jede Einstellung, die dabei verlorenginge.
+
+Der Fehler wirkte auch auf die Sicherung: sie wird ebenfalls aus
+`wi_defaults()` gebildet und trug die drei Schlüssel deshalb nicht. Eine
+zurückgespielte Sicherung war damit unvollständig. Jetzt trägt sie **alle**
+Einstellungen — nachgemessen: 15 von 15.
+
+### Störcodes im Klartext — sieben Tabellen, und keine Sammeltabelle
+
+Datenpunkt 372 „Zuletzt aktiver Störcode“ liefert eine Zahl. In 3.0.8 blieb
+sie eine Zahl, weil die Zuordnung nicht erfunden werden sollte. Sie ist jetzt
+aus den offiziellen WOLF-Betriebsanleitungen ausgelesen — **und dabei kam
+heraus, dass es die eine Tabelle gar nicht gibt:**
+
+    72 verschiedene Codenummern über alle Geräte
+    60 bedeuten überall dasselbe
+    12 sind mehrdeutig
+
+| Code | Brennwertgerät | Wärmepumpe | |
+|---|---|---|---|
+| 15 | Außentemperaturfühler defekt | T_Aussen | dieselbe Störung, anders benannt |
+| **116** | **Externe Störung Eingang E1** | **ESM** | **andere Störung** |
+
+Eine gemeinsame Tabelle wäre also nicht bloss ungenau, sondern stellenweise
+falsch — und in Loxone stünde ein Klartext, auf den jemand eine
+Benachrichtigung legt. **Deshalb liegt eine Tabelle je Gerätefamilie bei, und
+im Reiter *Einstellungen* wählt man seinen Wärmeerzeuger.** Ohne Auswahl
+bleibt der Störcode eine Zahl — geraten wird nicht.
+
+| Tabelle | Geräte | Zeilen |
+|---|---|---|
+| CGB-2-38, CGB-2-55 | Gas-Brennwerttherme | 37 |
+| CGB-2-75, CGB-2-100 | Gas-Brennwerttherme | 39 |
+| TGB-2 | Gas-Brennwertkessel | 39 |
+| COB-2 | Öl-Brennwertkessel | 35 |
+| TOB | Öl-Brennwertkessel | 42 |
+| CHA-07/10, CHA-16/20, CHA-20/24 | Wärmepumpe (HCM-4) | 25 |
+| FHA-Standard, FHA-Center | Wärmepumpe (HCM-5) | 27 |
+
+Die drei CHA-Anleitungen tragen **wortgleich** dieselbe Tabelle, die beiden
+COB-2-Anleitungen ebenso — auch das gemessen, nicht angenommen. Daneben
+liegen fünf `wolf_warncodes_*.csv`: die *Warn*meldungen sind eine eigene
+Tabelle, die dieselben Nummern anders belegt. Sie gehören **nicht** zu
+Datenpunkt 372 und werden nur mitgeliefert, damit niemand beides vermischt.
+
+Eine eigene Datei unter `config/plugins/<ordner>/wolf_stoercodes.csv` schlägt
+weiterhin alles. Der Reiter *Test* sagt jetzt, welche Tabelle gerade gilt und
+woher sie stammt — mit drei Ausgängen, denn „keine gewählt“ ist weder
+Fehler noch Erfolg.
+
+### Wie belastbar der Auszug ist
+
+Ausgelesen über die Wortkoordinaten der PDF-Seiten, Spaltengrenzen aus dem
+Tabellenkopf. Gegengeprüft mit einem zweiten Werkzeug (`pdftotext`): 266 der
+329 Zeilen unabhängig belegt. Die übrigen 63 sind nicht falsch, sondern mit
+diesem Mittel nicht prüfbar — bei mehrzeiligen Zellen schiebt `pdftotext` den
+Text der Nachbarspalte dazwischen. Dafür kam ein drittes Mittel dazu: vier
+Tabellenseiten wurden gerendert und abgelesen, 19 Zeilen aus beiden
+Gerätefamilien, darunter gezielt die offengebliebenen — alle 19 stimmten
+zeichengenau.
+
+**Und die Gegenrichtung:** jede Zahl, die auf einer Tabellenseite in der
+Codespalte steht, ist auch im Auszug — null Fehlende über zehn Anleitungen,
+geprüft mit einer Probe, die eine künstlich entfernte Zeile meldet.
+
+**Was offen bleibt:** ob Datenpunkt 372 tatsächlich die Nummer aus der
+Gerätetabelle sendet und nicht eine intern umgerechnete, ist ohne ein echtes
+ISM8 nicht messbar. Das ist die eine Annahme, auf der die Klartexte stehen.
+Wer es an seiner Anlage nachsehen kann, möge es melden.
+
 ## Version 3.0.8 — dreissig Befunde behoben, dreiundzwanzig Funktionen dazu
 
 Aus einer zeilenweisen Durchsicht der 3.0.7 mit zwei Gegenlesern. Die
