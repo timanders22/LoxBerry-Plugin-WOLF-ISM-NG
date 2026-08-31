@@ -646,19 +646,27 @@ $wi_reiter = array(
  * behaupten waere fuer die Haelfte der Anlagen falsch. */
 $wi_gwf = ($wi_gw === null) ? 0 : (int) $wi_gw['fassung'];
 ?>
-<?php if ($wi_gwf === 1 || $wi_gwf === 0) { ?>
-<div class="sm-step">
-<b><?= wi_t('MQTT.ABO_V1_H') ?></b><br>
-<?= sprintf(wi_t('MQTT.ABO_V1'), '<span class="sm-mono">' . wi_e($wi_pre) . '/#</span>') ?>
-</div>
-<?php } ?>
-<?php if ($wi_gwf === 2 || $wi_gwf === 0) { ?>
-<div class="sm-step">
+<div class="sm-step"><?= sprintf(wi_t('MQTT.ABO_EINLEITUNG'),
+    '<span class="sm-mono">' . wi_e($wi_pre) . '/#</span>') ?></div>
+<?php if ($wi_gwf >= 2) { ?>
+<div class="sm-hinweis">
 <b><?= wi_t('MQTT.ABO_V2_H') ?></b><br>
 <?= wi_t('MQTT.ABO_V2') ?>
 </div>
-<?php } ?>
-<?php if ($wi_gwf === 0) { ?>
+<?php } elseif ($wi_gwf === 1) { ?>
+<div class="sm-warnung">
+<b><?= wi_t('MQTT.ABO_V1_H') ?></b><br>
+<?= wi_t('MQTT.ABO_V1') ?>
+</div>
+<?php } else { ?>
+<div class="sm-warnung">
+<b><?= wi_t('MQTT.ABO_V1_H') ?></b><br>
+<?= wi_t('MQTT.ABO_V1') ?>
+</div>
+<div class="sm-hinweis">
+<b><?= wi_t('MQTT.ABO_V2_H') ?></b><br>
+<?= wi_t('MQTT.ABO_V2') ?>
+</div>
 <div class="sm-small"><?= wi_t('MQTT.ABO_UNKLAR') ?></div>
 <?php } ?>
 
