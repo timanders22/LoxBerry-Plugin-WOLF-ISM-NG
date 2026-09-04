@@ -79,6 +79,23 @@ netz_zurueck() {
         fi
     fi
 }
-netz_zurueck "wolf_ism8i.conf" "7cf94e7c38abb28a3f40a68beaa1964f1fea04b52bfc394b1d66f1b7855b164e"
+# Die Pruefsumme der mitgelieferten Vorgabe wird GERECHNET, nicht
+# eingetragen. Bis 3.0.10 stand sie als Zeichenkette hier; wer
+# config/wolf_ism8i.conf um ein Zeichen aendert, ohne diese Zeile
+# nachzuziehen, schaltet das zweite Netz still ab - netz_zurueck
+# erkennt die frisch kopierte Vorgabe dann nicht mehr als "verloren".
+# Der Archivordner steht zur Laufzeit von postinstall noch
+# (aufgeraeumt wird erst in plugininstall.pl:1455).
+NETZ_VORGABE="${6:-}/config/wolf_ism8i.conf"
+if [ -f "$NETZ_VORGABE" ]; then
+    NETZ_SOLL=$(sha256sum "$NETZ_VORGABE" 2>/dev/null | cut -d" " -f1)
+else
+    NETZ_SOLL=""
+fi
+if [ -z "$NETZ_SOLL" ]; then
+    echo "<INFO> Die mitgelieferte Vorgabe war nicht lesbar - es wird nur"
+    echo "<INFO> auf fehlende oder leere Konfiguration geprueft."
+fi
+netz_zurueck "wolf_ism8i.conf" "$NETZ_SOLL"
 
 exit 0

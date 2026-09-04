@@ -30,9 +30,24 @@ BASE="${5:-$LBHOMEDIR}"
 # Dritter Rueckfall: der eigene Ablageort. Bewusst kein fest verdrahteter
 # Systempfad - LoxBerry laesst sich anderswohin installieren, und der
 # Plugin-Pruefer sucht die Zeichenkette, ohne den Zusammenhang zu sehen.
-# Dieses Skript liegt unter <home>/data/plugins/<ordner>/uninstall/
+# Dieses Skript liegt zur Laufzeit unter
+#     <home>/data/system/uninstall/<pname>
+# - nachgemessen an plugininstall.pl:1170 (Kopie) und :1589 (Aufruf).
+# Von dort sind es DREI Ebenen bis zur Wurzel, nicht vier. Der
+# Kommentar nannte bis 3.0.10 <home>/data/plugins/<ordner>/uninstall/
+# - dort liegt das Skript nie, und die vierte Ebene haette auf das
+# Elternverzeichnis von <home> gezeigt. Der Zweig ist heute tot, weil
+# der Installer $5 immer uebergibt; falsch war er trotzdem.
 if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    BASE=$(cd "$(dirname "$(readlink -f "$0")")/../../../.." 2>/dev/null && pwd)
+    BASE=$(cd "$(dirname "$(readlink -f "$0")")/../../.." 2>/dev/null && pwd)
+fi
+# Und eine Wache davor: sieht es hier nicht wie ein LoxBerry aus,
+# wird nichts geloescht und nichts behauptet.
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ]; then
+    echo "<WARNING> Die LoxBerry-Wurzel liess sich nicht bestimmen."
+    echo "<WARNING> Es wurde nichts entfernt. Von Hand nachsehen:"
+    echo "<WARNING>   config/plugins/$PDIR.backup.wolf_ism8i.conf"
+    exit 0
 fi
 
 BINPATH="$BASE/bin/plugins/$PDIR"
@@ -72,6 +87,24 @@ wolf_beenden() {
 wolf_beenden "$BINPATH/wolf_watchdog.sh"
 sleep 1
 wolf_beenden "$BINPATH/wolf_ism8i.pl"
+
+# Die Zweitschrift NEBEN dem Konfigurationsordner raeumt der Installer
+# nicht weg - er loescht nur config/plugins/<ordner>/ selbst
+# (plugininstall.pl:1629). Bis 3.0.10 blieb sie liegen, und
+# postinstall.sh spielte sie bei der naechsten Installation zurueck:
+# eine "saubere" Neuinstallation stand danach wieder auf enable 1,
+# den alten Ports und der alten Multicast-Adresse.
+ZWEITSCHRIFT="$BASE/config/plugins/$PDIR.backup.wolf_ism8i.conf"
+if [ -f "$ZWEITSCHRIFT" ]; then
+    if rm -f "$ZWEITSCHRIFT"; then
+        echo "<OK> Zweitschrift der Einstellungen entfernt."
+    else
+        echo "<WARNING> Die Zweitschrift liess sich nicht entfernen:"
+        echo "<WARNING>   $ZWEITSCHRIFT"
+    fi
+else
+    echo "<INFO> Keine Zweitschrift der Einstellungen vorhanden."
+fi
 
 echo "<INFO> Der ISM8-Port ist damit wieder frei."
 echo "<INFO> Im MQTT-Broker koennen Werte stehen bleiben, wenn das Plugin mit"

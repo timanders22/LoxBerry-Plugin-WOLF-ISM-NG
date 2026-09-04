@@ -23,10 +23,48 @@
  */
 
 if (!function_exists('wi_e')) {
+    /**
+     * Maskieren fuer die Ausgabe.
+     *
+     * ENT_SUBSTITUTE ist Pflicht: OHNE ihn gibt htmlspecialchars() bei
+     * ungueltigem UTF-8 eine LEERE Zeichenkette zurueck, still und ohne
+     * Meldung. Gemessen am 04.09.2026 unter PHP 7.4.33: von 228 Suchschluesseln
+     * der Datenpunkttabelle waren 133 leer - alle, deren Geraete- oder
+     * Datenpunktname einen Umlaut traegt. Ursache war ein strtolower() davor;
+     * das arbeitet byteweise und ist bis PHP 8.1 vom Locale abhaengig. Der
+     * Aufrufer ist berichtigt (index.php), aber die Funktion selbst darf aus
+     * kaputtem Text kein Nichts machen: ein Ersatzzeichen ist sichtbar, eine
+     * leere Zeichenkette nicht.
+     */
     function wi_e($s)
     {
-        return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8');
+        return htmlspecialchars((string) $s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
+}
+
+/**
+ * Kleinschreibung, die UTF-8 heil laesst.
+ *
+ * strtolower() arbeitet byteweise und ist bis PHP 8.1 vom Locale abhaengig.
+ * Gemessen am 04.09.2026 unter PHP 7.4.33 mit LC_CTYPE=German_Germany.1252:
+ * aus "Heizgerät" wurde eine ungueltige UTF-8-Folge, und htmlspecialchars()
+ * machte daraus eine leere Zeichenkette - 133 von 228 Suchschluesseln der
+ * Datenpunkttabelle waren leer, die betroffenen Datenpunkte ueber das
+ * Suchfeld nicht mehr auffindbar. Unter 8.4 (LC_CTYPE=C) trat es nicht auf.
+ * mbstring ist auf einem LoxBerry nicht garantiert geladen, deshalb die
+ * Wache; ohne sie bleibt der Text unveraendert - das ist schlechter zu
+ * durchsuchen, aber nie kaputt.
+ */
+function wi_klein($s)
+{
+    $s = (string) $s;
+    if (function_exists('mb_strtolower')) {
+        return mb_strtolower($s, 'UTF-8');
+    }
+    // Nur ASCII kleinschreiben; Bytes ab 0x80 bleiben unberuehrt.
+    return preg_replace_callback('/[A-Z]+/', function ($m) {
+        return strtolower($m[0]);
+    }, $s);
 }
 
 /** Basisverzeichnisse ermitteln - funktioniert installiert wie im Archiv. */
@@ -202,10 +240,22 @@ function wi_formkey()
     if (!is_dir($ordner)) {
         @mkdir($ordner, 0775, true);
     }
+    /* Rechte VOR dem Inhalt - jetzt auch im Code, nicht nur im Kommentar
+     * darueber. Bis 3.0.10 schrieb file_put_contents() zuerst und chmod()
+     * danach; zwischen den beiden Aufrufen lag das Merkmal mit der Vorgabe
+     * der umask da. Die Nebendatei traegt die PID im Namen, damit Cron,
+     * Dienst und Oberflaeche einander nicht dazwischenschreiben. */
     $tmp = $datei . '.tmp.' . getmypid();
-    if (@file_put_contents($tmp, $k) !== false) {
+    $fh = @fopen($tmp, 'c');
+    if ($fh) {
         @chmod($tmp, 0600);
-        @rename($tmp, $datei);
+        if (@ftruncate($fh, 0) && @fwrite($fh, $k) === strlen($k)) {
+            @fclose($fh);
+            @rename($tmp, $datei);
+        } else {
+            @fclose($fh);
+            @unlink($tmp);
+        }
     }
     return $k;
 }
@@ -255,6 +305,26 @@ function wi_defaults()
          * wi_stoercode_tabellen(). Eine falsche Tabelle waere schlimmer
          * als gar keine, deshalb wird nicht geraten. */
         'stoercodes'     => '',
+
+        /* --- SG-Ready und Paragraph 14a EnWG (V24, neu in 3.1.0) --------
+         *
+         * ALLE ab Werk aus. Zwei Schalter, nicht einer: sg_ein schaltet die
+         * Rechnung ein, sg_senden das Schreiben an die Heizung. Wer eine
+         * Heizung von aussen stellt, soll das zweimal entschieden haben. */
+        'sg_ein'           => '0',
+        'sg_senden'        => '0',
+        'sg_quelle'        => 'aus',
+        'sg_awattar_ordner' => 'spotpreis',
+        'sg_stunden'       => '4',
+        'sg_block'         => '2',
+        'sg_horizont'      => '24',
+        'sg_kreis'         => 'direkt',
+        'sg_ww_normal'     => '48',
+        'sg_ww_laden'      => '55',
+        'sg_korrektur'     => '2',
+        'sg_14a'           => '0',
+        'sg_14a_modus'     => 'spar',
+        'sg_14a_alter'     => '900',
     );
 }
 
@@ -280,6 +350,12 @@ function wi_config_read()
             continue;
         }
         $f = preg_split('/\s+/', $t);
+        // Eine Zeile mit nur einem Schluessel ist ein LEERER Wert, keine
+        // kaputte Zeile - dieselbe Regel wie in wi_konfig_einlesen(). Der
+        // Werkszustand von 'stoercodes' sieht genau so aus.
+        if (count($f) === 1) {
+            $f[] = '';
+        }
         if (count($f) !== 2) {
             continue;
         }
@@ -432,10 +508,54 @@ function wi_mqtt_friendly($s)
     return $s;
 }
 
-/** Vollstaendiges MQTT-Thema eines Datenpunkts. */
+/**
+ * Das EINGESTELLTE Themen-Praefix, einmal gelesen.
+ *
+ * Bis 3.0.10 stand in wi_topic() das Wort 'wolf_ng' fest verdrahtet, waehrend
+ * der Kommentar ueber wi_topic_pre() das Gegenteil zusicherte. Gemessen am
+ * 04.09.2026 mit praefix=heizung: von 223 Titeln der MQTT-Eingangsvorlage
+ * trugen 220 das falsche Praefix, und alle 71 Befehle der Ausgangsvorlage
+ * schrieben auf ein Thema, das der Dienst gar nicht abonniert
+ * (bin/wolf_ism8i.pl:209). Der Anwender sah das Lebenszeichen ticken - die
+ * drei Themen daneben waren richtig - und suchte den Fehler in seiner Anlage.
+ */
+function wi_praefix()
+{
+    static $p = null;
+    if ($p === null) {
+        $p = wi_cfg(wi_config_read(), 'praefix', 'wolf_ng');
+    }
+    return $p;
+}
+
+/** Vollstaendiges MQTT-Thema eines Datenpunkts, mit dem eingestellten Praefix. */
 function wi_topic($d)
 {
-    return 'wolf_ng/' . wi_mqtt_friendly($d['geraet']) . '/' . wi_mqtt_friendly($d['name']);
+    return wi_topic_pre(wi_praefix(), $d);
+}
+
+/**
+ * Traegt dieser KNX-Datenpunkttyp einen ZUSTAND (retained) oder einen
+ * MESSWERT mit Zeitbezug (nicht retained)?
+ *
+ * Dieselbe Liste wie @ZUSTAND_TYPEN in bin/wolf_ism8i.pl. Sie steht
+ * zwangslaeufig zweimal da - ueber die Sprachgrenze hinweg gibt es keine
+ * gemeinsame Funktion -, und genau deshalb zaehlt der Reiter Test sie
+ * gegeneinander (wi_zustandstypen_pruefen()).
+ */
+function wi_zustandstypen()
+{
+    return array(
+        'DPT_Switch', 'DPT_Bool', 'DPT_Enable', 'DPT_OpenClose',
+        'DPT_HVACMode', 'DPT_DHWMode', 'DPT_HVACContrMode',
+        'DPT_Value_1_Ucount', 'DPT_Value_2_Ucount',
+    );
+}
+
+/** Geht dieses Thema retained hinaus? */
+function wi_ist_zustand($dpt)
+{
+    return in_array((string) $dpt, wi_zustandstypen(), true);
 }
 
 
@@ -529,8 +649,16 @@ function wi_fw_verdacht()
     $min = isset($z['unbekannt_min']) ? (int) $z['unbekannt_min'] : -1;
     $max = isset($z['unbekannt_max']) ? (int) $z['unbekannt_max'] : -1;
     $vermutet = '';
-    // Welche mitgelieferte Tabelle kennt ALLE unbekannten Kennungen?
-    foreach (array('1.9', '1.8', '1.7', '1.5', '1.4') as $fw) {
+    /* Welche mitgelieferte Tabelle kennt ALLE unbekannten Kennungen?
+     *
+     * AUFSTEIGEND, und das ist der ganze Befund: die fuenf Tabellen sind
+     * echte Obermengen ineinander (gemessen 04.09.2026 - 1.4 in 1.5 in 1.7
+     * in 1.8 in 1.9, null fehlende Kennungen). Absteigend traf 1.9 deshalb
+     * IMMER zuerst, und der Reiter riet jedem Anwender zu 1.9, gleichgueltig
+     * welche Firmware sein Geraet fuhr. Die kleinste Tabelle, die reicht,
+     * ist die richtige Auskunft.
+     */
+    foreach (array('1.4', '1.5', '1.7', '1.8', '1.9') as $fw) {
         $dps = wi_datenpunkte($fw);
         if (!$dps) {
             continue;
@@ -576,7 +704,7 @@ function wi_betriebsarten($fw)
         ),
         'DPT_HVACContrMode' => array(
             'CGB-2|MGK-2|TOB|COB-2|TGB' => array(
-                0 => 'Schornsteinferger', 1 => 'Heiz- Warmwasserbetrieb',
+                0 => 'Schornsteinfeger', 1 => 'Heiz- Warmwasserbetrieb',
                 6 => 'Standby', 7 => 'GLT', 11 => 'Frostschutz', 15 => 'Kalibration'),
             'BWL-1-S|CHA|Wärmepumpe' => array(
                 0 => 'Antilegionellenfunktion', 1 => 'Heiz- Warmwasserbetrieb',
@@ -895,6 +1023,116 @@ function wi_konfig_text($cfg)
 }
 
 /**
+ * Taugt dieser WERT fuer diese Einstellung?
+ *
+ * Dieselbe Positivliste, die der Speicher-Handler in index.php benutzt - eine
+ * Funktion, zwei Aufrufer. Bis 3.0.10 prueften das Formular und das
+ * Zurueckspielen verschieden streng: das Formular wies "praefix ../../x" ab,
+ * eine hochgeladene Sicherung mit derselben Zeile wurde uebernommen.
+ *
+ * Ein LEERER Wert ist zulaessig, wo die Vorgabe leer ist (stoercodes) oder wo
+ * er "nicht gesetzt" bedeutet - die Lesefunktion faellt dann auf die Vorgabe
+ * zurueck. Melden ist richtig, blockieren nicht: eine Beanstandung nennt den
+ * Schluessel und den abgewiesenen Wert.
+ */
+function wi_wert_taugt($k, $v)
+{
+    $v = (string) $v;
+    // Was in eine Zeile "schluessel wert" gehoert: kein Steuerzeichen, kein
+    // Leerraum, keine unmaessige Laenge.
+    if (strlen($v) > 256) {
+        return false;
+    }
+    if (preg_match('/[\x00-\x20\x7F]/', $v) === 1) {
+        return false;
+    }
+    switch ($k) {
+        case 'enable':
+        case 'dp_log':
+        case 'mqtt':
+        case 'pull_on_write':
+            return preg_match('/^[01]$/', $v) === 1;
+        case 'ism8i_port':
+        case 'input_port':
+        case 'multicast_port':
+            return ctype_digit($v) && (int) $v >= 1 && (int) $v <= 65535;
+        case 'herzschlag':
+        case 'abgleich_takt':
+            return ctype_digit($v) && (int) $v >= 0 && (int) $v <= 86400;
+        case 'online_timeout':
+            return preg_match('/^(-1|[0-9]+)$/', $v) === 1;
+        case 'output':
+            return in_array($v, array('none', 'data', 'csv', 'fhem'), true);
+        case 'fw_version':
+            return in_array($v, array('1.4', '1.5', '1.7', '1.8', '1.9'), true);
+        case 'praefix':
+            // Dasselbe Muster wie im Dienst (bin/wolf_ism8i.pl, loadConfig).
+            return preg_match('/^[a-z0-9_-]{1,32}$/', $v) === 1;
+        case 'multicast_ip':
+            return preg_match('/^(?:(?:\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.){3}'
+                            . '(?:\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])$/', $v) === 1;
+        case 'stoercodes':
+            // Leer heisst "keine gewaehlt" und ist der Werkszustand.
+            return $v === '' || isset(wi_stoercode_tabellen()[$v]);
+        case 'ism8i_ip':
+            return $v === '' || preg_match('/^[A-Za-z0-9_.:-]{1,64}$/', $v) === 1;
+        /* --- SG-Ready (V24) --------------------------------------------- */
+        case 'sg_ein':
+        case 'sg_senden':
+        case 'sg_14a':
+            return preg_match('/^[01]$/', $v) === 1;
+        case 'sg_quelle':
+            return in_array($v, array('aus', 'datei', 'awattar'), true);
+        case 'sg_awattar_ordner':
+            return preg_match('/^[A-Za-z0-9_-]{1,64}$/', $v) === 1;
+        case 'sg_stunden':
+            return ctype_digit($v) && (int) $v >= 0 && (int) $v <= 24;
+        case 'sg_block':
+            return ctype_digit($v) && (int) $v >= 1 && (int) $v <= 12;
+        case 'sg_horizont':
+            return ctype_digit($v) && (int) $v >= 1 && (int) $v <= 48;
+        case 'sg_kreis':
+            return in_array($v, array('direkt', 'mischer1', 'mischer2', 'mischer3'), true);
+        case 'sg_ww_normal':
+        case 'sg_ww_laden':
+            // Der Bereich ist bewusst eng. 70 Grad sind an einem
+            // Warmwasserspeicher schon die Legionellenschaltung; darueber
+            // hat dieses Modul nichts zu suchen.
+            return preg_match('/^[0-9]{1,2}(\.[0-9])?$/', $v) === 1
+                   && (float) $v >= 30 && (float) $v <= 70;
+        case 'sg_korrektur':
+            return preg_match('/^-?[0-9]{1,2}(\.[0-9])?$/', $v) === 1
+                   && (float) $v >= -5 && (float) $v <= 5;
+        case 'sg_14a_modus':
+            return in_array($v, array('spar', 'standby'), true);
+        case 'sg_14a_alter':
+            return ctype_digit($v) && (int) $v >= 0 && (int) $v <= 86400;
+    }
+    // Ein Schluessel, den diese Liste nicht kennt, kommt nicht durch. Wer
+    // wi_defaults() erweitert, erweitert diese Liste mit - der Reiter Test
+    // zaehlt beide gegeneinander (wi_wertpruefung_vollstaendig()).
+    return false;
+}
+
+/**
+ * Steht fuer JEDEN Vorgabeschluessel eine Wertpruefung bereit?
+ * Rueckgabe: Liste der Schluessel ohne Pruefung (leer = in Ordnung).
+ */
+function wi_wertpruefung_luecken()
+{
+    $fehlt = array();
+    foreach (wi_defaults() as $k => $v) {
+        // Der Vorgabewert selbst MUSS durchkommen, sonst weist die Pruefung
+        // den Werkszustand ab - genau der Fehler, den sicherung_wirkung.py
+        // an einer anderen Linie schon einmal gefunden hat.
+        if (!wi_wert_taugt($k, $v)) {
+            $fehlt[] = $k;
+        }
+    }
+    return $fehlt;
+}
+
+/**
  * Eine hochgeladene Sicherung pruefen und uebernehmen.
  * Rueckgabe: array(uebernommen, Liste der Beanstandungen)
  *
@@ -913,6 +1151,15 @@ function wi_konfig_einlesen($roh)
             continue;
         }
         $f = preg_split('/\s+/', $t);
+        // Eine Zeile mit NUR einem Schluessel ist ein LEERER Wert, keine
+        // Beanstandung. Bis 3.0.10 fiel sie durch die Feldzahlpruefung - und
+        // weil wi_konfig_text() den leeren Vorgabewert von 'stoercodes' als
+        // "stoercodes " schreibt, lehnte das Zurueckspielen die Datei ab, die
+        // das Sichern soeben ausgeliefert hatte. Im Werkszustand, also auf
+        // jeder frischen Anlage, war der Rundlauf damit unbenutzbar.
+        if (count($f) === 1) {
+            $f[] = '';
+        }
         if (count($f) !== 2) {
             $mangel[] = sprintf(wi_t('MELDUNG.SICH_ZEILE'), wi_e($t));
             continue;
@@ -920,6 +1167,15 @@ function wi_konfig_einlesen($roh)
         $k = strtolower($f[0]);
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(wi_t('MELDUNG.SICH_SCHLUESSEL'), wi_e($k));
+            continue;
+        }
+        // Der WERT wird geprueft, nicht nur der Schluessel - mit derselben
+        // Positivliste, die auch der Speicher-Handler benutzt. Bis 3.0.10 kam
+        // hier alles durch, was keinen Leerraum enthielt: eine Sicherung mit
+        // "praefix ../../etc/passwd" wurde uebernommen, die Oberflaeche zeigte
+        // den Unsinn an, und der Dienst arbeitete still mit etwas anderem.
+        if (!wi_wert_taugt($k, $f[1])) {
+            $mangel[] = sprintf(wi_t('MELDUNG.SICH_WERT'), wi_e($k), wi_e($f[1]));
             continue;
         }
         $neu[$k] = $f[1];
@@ -1523,13 +1779,37 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
             if (strpos($d['io'], 'In') === false || !$gewaehlt($d)) {
                 continue;
             }
+            // Uhrzeit und Datum gehoeren auch hier nicht hin. Der Filter stand
+            // bis 3.0.10 nur in den beiden EINGANGS-Zweigen; die Ausgangs-
+            // vorlagen trugen je acht analoge Befehle fuer DPT_TimeOfDay und
+            // DPT_Date, die der Dienst nie annehmen kann (to_pdt_time verlangt
+            // HH:MM:SS, to_pdt_date TT.MM.JJJJ - ein analoger Loxone-Befehl
+            // schickt eine Dezimalzahl). Jede Betaetigung erzeugte nur eine
+            // Fehlerzeile im Protokoll.
+            if (in_array($d['dpt'], $zeit_typen, true)) {
+                continue;
+            }
             list($min, $max, $unit, $analog) = wi_grenzen($d['dpt'], $d['einheit']);
-            $cmds[] = array(
-                'title'  => $d['geraet'] . ' ' . $d['name'],
-                'method' => 'get',
-                'on'     => sprintf('%03d', $d['id']) . ';\\v',
-                'analog' => $analog,
-            );
+            $nr = sprintf('%03d', $d['id']);
+            // Ein DIGITALER Befehl braucht beide Nutzlasten. Bis 3.0.10 blieb
+            // CmdOff bei allen 71 Befehlen leer, weil kein Zweig 'off' setzte:
+            // die Schalt-Datenpunkte liessen sich einschalten und nicht wieder
+            // aus. <v.0> taugt dort ohnehin nicht - parseInput nimmt 0, 1,
+            // true und false, keine Dezimalzahl.
+            $cmds[] = $analog
+                ? array(
+                    'title'  => $d['geraet'] . ' ' . $d['name'] . ' setzen',
+                    'method' => 'get',
+                    'on'     => $nr . ';\\v',
+                    'analog' => true,
+                  )
+                : array(
+                    'title'  => $d['geraet'] . ' ' . $d['name'] . ' setzen',
+                    'method' => 'get',
+                    'on'     => $nr . ';1',
+                    'off'    => $nr . ';0',
+                    'analog' => false,
+                  );
         }
         return array('wolf_output.xml', wi_xml_virtual_out(array(
             'title'   => 'Wolf ISM8',
@@ -1585,16 +1865,34 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
             if (strpos($d['io'], 'In') === false || !$gewaehlt($d)) {
                 continue;
             }
+            // Derselbe Zeitfilter wie im Eingangszweig - siehe tcp_out.
+            if (in_array($d['dpt'], $zeit_typen, true)) {
+                continue;
+            }
             $thema = wi_topic($d);
             list($min, $max, $unit, $analog) = wi_grenzen($d['dpt'], $d['einheit']);
-            $cmds[] = array(
-                // <v.0> ist der Wertplatzhalter eines Analogbefehls; bis
-                // 3.0.7 stand hier <v>.
-                'title'   => str_replace('/', '_', $thema),
-                'comment' => $d['geraet'] . ' ' . $d['name'],
-                'on'      => 'retain ' . $thema . ' <v.0>',
-                'analog'  => $analog,
-            );
+            // Der Titel traegt den Zusatz "setzen". Ohne ihn hiess der
+            // Ausgangsbefehl genauso wie der virtuelle Eingang desselben
+            // Datenpunkts - 63 Titelpaare, und das MQTT-Gateway spricht seine
+            // Objekte ueber den Namen an. Die Adresse steht im CmdOn und
+            // bleibt davon unberuehrt.
+            $titel = str_replace('/', '_', $thema) . '_setzen';
+            $cmds[] = $analog
+                ? array(
+                    // <v.0> ist der Wertplatzhalter eines Analogbefehls; bis
+                    // 3.0.7 stand hier <v>.
+                    'title'   => $titel,
+                    'comment' => $d['geraet'] . ' ' . $d['name'],
+                    'on'      => 'retain ' . $thema . ' <v.0>',
+                    'analog'  => true,
+                  )
+                : array(
+                    'title'   => $titel,
+                    'comment' => $d['geraet'] . ' ' . $d['name'],
+                    'on'      => 'retain ' . $thema . ' 1',
+                    'off'     => 'retain ' . $thema . ' 0',
+                    'analog'  => false,
+                  );
         }
         return array('wolf_mqtt_output.xml', wi_xml_virtual_out(array(
             'title'   => 'Wolf ISM8 MQTT',

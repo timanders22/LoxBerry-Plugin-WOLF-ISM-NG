@@ -23,6 +23,321 @@ Die Kette: **Dr. Mugur Dietrich** (Auswertungsmodul, 2017) → **Dominik
 Holland** ([Gagi2k/LoxBerry-Plugin-WolfIsm8](https://github.com/Gagi2k/LoxBerry-Plugin-WolfIsm8),
 Einbettung als LoxBerry-Plugin) → diese Fortführung.
 
+## Version 3.1.0 — SG-Ready und § 14a EnWG
+
+Ein neuer Reiter **SG-Ready** zwischen *MQTT* und *Einbindung in Loxone*. Er
+rechnet aus Stundenpreisen Ladefenster aus, hebt in diesen Fenstern den
+Warmwassersollwert und die Sollwertkorrektur an und stellt außerhalb die
+Normalwerte wieder her. Ein Dimmsignal des Netzbetreibers nach § 14a EnWG hat
+Vorrang vor allem anderen.
+
+### Zuerst das Wichtigste: was hier nicht gemessen ist
+
+**Kein einziger der gebildeten Befehle ist je an einem WOLF-Gerät angekommen.**
+Dieses Plugin wurde ohne ISM8 gebaut. Belegt ist:
+
+* dass die Datenpunkte 56 bis 105 in den mitgelieferten Tabellen als
+  beschreibbar geführt sind (Spalte `Out/In`),
+* welche Zahlen die Betriebsarten bedeuten (`wi_betriebsarten()`, deckungsgleich
+  mit `getCsvResult()` im Auswertungsmodul),
+* dass `parseInput()` diese Werte annimmt und daraus ein Telegramm baut.
+
+**Nicht belegt ist, was Ihre Heizung daraufhin tut.** Deshalb sind zwei
+Schalter nötig, nicht einer, und deshalb steht der Vorbehalt im Reiter selbst
+noch einmal in ganzen Sätzen.
+
+### Zwei Schalter
+
+| Schalter | Was er tut |
+|---|---|
+| **SG-Ready rechnen** | Das Modul plant, zeigt den Fahrplan und veröffentlicht ihn über MQTT. Es schreibt **nichts** an die Heizung. |
+| **An die Heizung schreiben** | Erst mit diesem zweiten Schalter gehen Befehle wirklich hinaus. |
+
+Beide stehen ab Werk auf 0. Der Grund für den zweiten: eine Plugin-Einstellung
+lässt sich zurücknehmen, ein an die Heizung geschriebener Sollwert wirkt sofort
+und in einem Haus, in dem Menschen wohnen. Wer das einschaltet, soll es zweimal
+getan haben. Der zweite Schalter lässt sich außerdem nicht setzen, solange der
+erste aus ist — ein scharfer Schalter an einem stillen Modul wäre eine Falle.
+
+### Woher die Preise kommen
+
+Zwei Wege, und jeder sagt von sich, wie belastbar er ist:
+
+1. **Eine eigene Datei** `config/plugins/<ordner>/sg_preise.json`. Format:
+
+       {"preise": {"1757116800": 12.34, "1757120400": 9.87}}
+
+   Schlüssel ist der Unix-Zeitstempel des Stundenbeginns, Wert der Preis in
+   ct/kWh. Diesen Weg kann jedes Plugin und jedes Skript bedienen, und er ist
+   der einzige, dessen Format hier zugesagt wird.
+
+2. **Der Zwischenspeicher des aWATTar-Plugins**
+   (`data/plugins/spotpreis/markt_<tld>_<JJJJMMTT>.json`). Bequemer, aber das
+   ist dessen **interne Ablage und keine Schnittstelle** — gemessen am
+   04.09.2026 an `LoxBerry-Plugin-Spotpreis-aWATTar-1.2.20`, Funktion
+   `spot_day()`. Ändert jenes Plugin sein Format, liefert dieser Weg **nichts**
+   statt etwas Falsches. Viertelstundenwerte werden zu Stundenmitteln
+   zusammengefasst, nicht ausgewählt — dieselbe Rechnung wie im Quellplugin.
+
+Gezeigt wird der **Börsenpreis**, nicht Ihr Arbeitspreis. Netzentgelte, Umlagen
+und Steuern kommen hinzu. Für die Frage, welche Stunde die günstigste ist,
+genügt das, weil die übrigen Bestandteile über den Tag gleich sind; für eine
+Kostenaussage genügt es nicht.
+
+### Wie die Ladefenster entstehen
+
+Das Verfahren ist gierig und in einem Satz erklärbar: es sucht das billigste
+zusammenhängende Fenster der eingestellten Mindestlänge, bucht es, und
+wiederholt das, bis die gewünschte Stundenzahl zusammen ist. Es ist **nicht
+optimal**. Es ist dafür nachvollziehbar, wenn jemand um drei Uhr nachts wissen
+will, warum die Heizung gerade lädt.
+
+Ein Fenster muss **lückenlos** sein. Fehlt eine Stunde im Preisbestand, wird
+sie nicht überbrückt — sonst wäre „zwei Stunden am Stück" eine Zusage, die der
+Plan nicht hält.
+
+**Warum hier nicht `planer.php` aus den Spotpreis-Plugins steht:** der
+Fahrplaner dort beantwortet eine andere Frage — welche Zeitscheiben ein
+Verbraucher mit Energiemenge, Frist, Rang und Leistungsbudget belegt. Eine
+Heizung hat keine Frist und keine vorher bekannte Energiemenge; sie hat einen
+Speicher, der sich zu füllen lohnt, solange der Strom billig ist. Das ist eine
+Auswahl, keine Belegung. Ihn hierher zu kopieren hieße außerdem, eine dritte
+Kopie derselben Datei zu führen.
+
+### Was gestellt wird
+
+Drei Lagen, die einander ausschließen:
+
+| Lage | Heizkreis | Warmwasser | Sollwertkorrektur |
+|---|---|---|---|
+| **gedimmt (§ 14a)** | Sparbetrieb oder Standby (einstellbar) | Standby | 0 |
+| **Ladefenster** | Automatik | Automatik, angehobener Sollwert | angehoben |
+| **normal** | Automatik | Automatik, normaler Sollwert | 0 |
+
+Die Datenpunktnummern werden **aus der Tabelle der eingestellten Firmware
+gelesen**, nicht im Modul hinterlegt — sonst gäbe es eine zweite Wahrheit über
+die Anlage. Kennt die Firmware einen der vier gebrauchten Punkte nicht, wird
+**gar nichts** gestellt und die Oberfläche sagt, welcher fehlt: ein halb
+gestellter Heizkreis ist schlimmer als ein ungestellter.
+
+Gesendet wird nur bei einem **Wechsel** der Lage. Ein Cron alle fünf Minuten,
+der jedes Mal vier Befehle schickt, erzeugte 1152 Schreibvorgänge am Tag an
+einer Heizung, die sich dreimal ändert. Und der Merker wird nur fortgeschrieben,
+wenn **alle** Befehle angekommen sind — sonst stünde beim nächsten Lauf
+„unverändert", während die Heizung halb gestellt ist.
+
+### § 14a EnWG
+
+**Das Signal kommt nicht von hier.** Es kommt von der Steuerbox Ihres
+Netzbetreibers. Dieses Modul ist die Energiemanagement-Seite daneben, kein
+Ersatz für die netzdienliche Steuerung — die ist eine Pflicht des Betreibers
+und hängt an dessen Gerät.
+
+Gelesen wird `data/plugins/<ordner>/sg_14a.json`:
+
+    {"dimmen": 1, "ts": 1757116800, "quelle": "Loxone VQ Steuerbox"}
+
+Wer sie schreibt, ist offen: ein virtueller Ausgang in Loxone, ein Shelly, ein
+Skript. Der Befehls-Port des Plugins kann es nicht — der nimmt nur
+Datenpunktbefehle.
+
+**Ist das Signal älter als die eingestellte Grenze, wird NICHT gedimmt.** Das
+ist eine bewusste Entscheidung und keine Nachlässigkeit: ein ausgefallener
+Melder ist kein Befehl des Netzbetreibers, und würde hier vorsorglich gedimmt,
+kühlte das Haus aus, weil ein Draht locker ist. Gemeldet wird es dafür laut —
+die Zeile im Reiter Test wird rot, und das Thema `sg/dimmen` trägt `-1`.
+
+### Über MQTT
+
+Sechs neue Themen unter `<präfix>/sg/`: `lage`, `laden`, `dimmen`, `fenster`,
+`naechster_start`, `naechster_preis` — Zustände, also retained — und `ts` als
+Lebenszeichen der Rechnung, nicht retained. Damit lässt sich der Fahrplan in
+Loxone anzeigen, ohne dass Loxone irgendetwas rechnen muss.
+
+### Der Reiter Test
+
+Zwei neue Zeilen: *Ist das SG-Ready-Modul stimmig eingerichtet?* (mit Zahl der
+Preise, Zahl der Fenster und der aktuellen Lage) und *Ist das Dimmsignal nach
+§ 14a frisch?* Die zweite ist grün nur bei einem wirklich frischen Signal, ein
+Strich bei ausgeschalteter Auswertung und sonst ein Kreuz — auch bei einem
+veralteten Signal, denn ein Haken neben dem Satz „das Signal ist veraltet" wäre
+genau der Fehlalarm, den diese Reihe sonst überall beseitigt.
+
+Der Rechenkern hat einen eigenen Selbsttest ohne Anlage:
+
+```bash
+php bin/wolf_sg.php --selbsttest
+```
+
+13 Fälle, unter PHP 7.4 und 8.4 gemessen, darunter die Gegenprobe, dass eine
+Lücke im Preisbestand kein Fenster überbrückt.
+
+## Version 3.0.11 — dreiundzwanzig Befunde behoben
+
+Eine reine Korrekturfassung. Sie bringt keine neue Funktion; jeder Punkt unten
+ist auf diesem Rechner gemessen, keiner an einem WOLF-Gerät.
+
+### Wichtig für alle, die das Themen-Präfix geändert haben
+
+**Die MQTT-Vorlagen und die Themenliste zeigten `wolf_ng/…`, gleichgültig was
+eingestellt war.** `wi_topic()` trug das Vorgabepräfix fest verdrahtet, während
+der Kommentar daneben das Gegenteil zusicherte. Gemessen mit `praefix heizung`:
+von 223 Titeln der MQTT-Eingangsvorlage trugen 220 das falsche Präfix, und alle
+71 Befehle der Ausgangsvorlage schrieben auf ein Thema, das der Dienst gar nicht
+abonniert. Der Dienst selbst sendete immer richtig — falsch war die Anzeige und
+die daraus erzeugte Vorlage. Wer sein Präfix geändert hat, holt die Vorlagen
+bitte neu und liest sie erneut ein.
+
+**Der Dienst hörte nach einer Präfix-Änderung weiter auf das alte Thema.**
+`connect_MQTT()` lief genau einmal beim Start; Abonnement und letzter Wille
+hingen daran. Über die Oberfläche erzwingt eine Präfix-Änderung jetzt einen
+Neustart des Dienstes, und der Dienst selbst verbindet bei SIGHUP neu, wenn
+sich Präfix oder MQTT-Schalter geändert haben.
+
+### Retain: Zustände ja, Messwerte nein, Lebenszeichen nie
+
+Bis 3.0.10 ging **jeder** Wert retained hinaus — vier `retain`-Aufrufe, kein
+einziger `publish`. Ein Miniserver, der sich verband, während die Heizung ruhte,
+bekam eine Vorlauftemperatur von vorgestern und konnte sie von einem frischen
+Wert nicht unterscheiden. Und das Lebenszeichen war als Ausfallerkennung
+entwertet: ein toter Dienst lieferte einem neu abonnierenden Empfänger weiterhin
+Zeitstempel und Zählerstand.
+
+Jetzt entscheidet der KNX-Datenpunkttyp: Schalter, Freigaben, Betriebsarten und
+die beiden Zähltypen gehen retained hinaus, alle Messgrößen mit Zeitbezug nicht.
+`zeitstempel` und `zaehler` sind nicht mehr retained, der letzte Wille auf
+`<präfix>/online` dagegen schon — erst damit hält er, was der Hilfetext ihm
+zuschreibt. Die Namenstabelle im Reiter MQTT hat dafür eine dritte Spalte
+bekommen, und der Reiter Test zählt die Typenliste der Oberfläche gegen die des
+Dienstes.
+
+**Für bestehende Anlagen:** Messwerte, die bisher retained im Broker standen,
+bleiben dort stehen, bis jemand sie räumt. Der Knopf *Retained-Themen aufräumen*
+im Reiter MQTT tut das.
+
+### Sichern und Zurückspielen passten im Werkszustand nicht zueinander
+
+Solange keine Störcodetabelle gewählt war — der Auslieferungszustand —, schrieb
+*Einstellungen sichern* die Zeile `stoercodes` ohne Wert, und *Einstellungen
+zurückspielen* lehnte deshalb **die ganze Datei** ab. Der Umzug auf einen
+zweiten LoxBerry war damit auf jeder frischen Anlage unmöglich, und die Meldung
+zeigte auf eine Einstellung, die der Anwender nie angefasst hatte. Eine Zeile
+mit nur einem Schlüssel gilt jetzt als leerer Wert — dieselbe Regel in allen
+drei Lesestellen. Der Reiter Test fährt den Rundlauf als eigene Prüfzeile.
+
+Zusätzlich prüft das Zurückspielen jetzt **jeden Wert**, nicht nur den
+Schlüssel, und zwar mit derselben Positivliste wie das Formular. Vorher kam
+alles durch, was keinen Leerraum enthielt.
+
+### Der Befehls-Port nahm negative Datenpunktkennungen an
+
+Perl zählt negative Feldindizes vom Ende. Die Kennung `-1` wählte damit den
+höchsten belegten Datenpunkt aus; unter Firmware 1.5 ist das die schreibbare
+Kesselsolltemperaturvorgabe. Der Befehl `-1;25` wurde angenommen, und das
+Telegramm ging mit der Kennung `0xFFFF` an den Heizungsbus. Unter 1.4, 1.8 und
+1.9 wurde er zufällig abgewiesen — es hing allein daran, ob der höchste
+Datenpunkt gerade schreibbar ist. Die Kennung muss jetzt eine Zahl sein.
+
+Derselbe Zugriff blähte außerdem das Datenpunktfeld dauerhaft auf (gemessen:
+372 → 65535 → 300000 Plätze). In einem Dauerläufer mit offenem Befehls-Port war
+das Speicherwachstum auf Zuruf von außen.
+
+### Ein Befehl mit Zeilenumbruch wurde weggeworfen
+
+Der getrimmte Befehl wurde nur für den Antworttext benutzt, geprüft wurden die
+rohen Daten. Ein `\r\n` — die Form, die ein virtueller Loxone-Ausgang je nach
+Einstellung schickt — kam als `1\r` an und fiel bei `DPT_Switch`, `DPT_Bool`,
+`DPT_Enable`, `DPT_OpenClose`, `DPT_HVACMode` und `DPT_DHWMode` durch die
+Wertprüfung. Die Zahlentypen nahmen ihn an, weil ihr Muster ein `\s*` führt —
+genau das machte den Fehler so schwer zu sehen.
+
+### Die Deinstallation ließ die Zweitschrift liegen
+
+`config/plugins/<ordner>.backup.wolf_ism8i.conf` liegt neben dem
+Konfigurationsordner, und der Installer räumt nur den Ordner selbst ab. Sie
+blieb also liegen, und `postinstall.sh` spielte sie bei der nächsten
+Installation zurück: eine „saubere" Neuinstallation stand danach wieder auf
+`enable 1`, den alten Ports und der alten Multicast-Adresse. `uninstall`
+entfernt sie jetzt und sagt, ob es geklappt hat.
+
+### Ausgangsvorlagen: `CmdOff` war leer, und acht Befehle konnten nie wirken
+
+Alle 71 Befehle beider Ausgangsvorlagen hatten ein leeres `CmdOff` — die
+Schalt-Datenpunkte ließen sich einschalten und nicht wieder aus. Digitale
+Befehle tragen jetzt feste Nutzlasten für Ein und Aus. Und der Filter, der
+Uhrzeit- und Datumstypen aus den **Eingangs**vorlagen hält, gilt jetzt auch für
+die Ausgangsvorlagen: acht analoge Befehle je Datei konnten der Dienst
+grundsätzlich nicht annehmen und erzeugten nur Fehlerzeilen im Protokoll.
+
+**Für bestehende Anlagen:** Die Titel der Ausgangsbefehle tragen jetzt den
+Zusatz `setzen`. Vorher hießen 63 von ihnen genauso wie der virtuelle Eingang
+desselben Datenpunkts, und das MQTT-Gateway spricht seine Objekte über den
+Namen an. Wer die Ausgangsvorlage neu einliest, bekommt die Befehle unter dem
+neuen Namen **neben** den alten; die alten dürfen weg.
+
+### Die Oberfläche
+
+* **Die Selbstprüfung lief bei jedem Seitenaufruf**, auch beim Öffnen der
+  Logdateien — gemessen 1,2 bis 1,7 Sekunden, darunter sechs Perl-Starts und die
+  Erzeugung aller vier Loxone-Vorlagen. Sie läuft jetzt nur noch, wenn der
+  Reiter Test der offene ist.
+* **Die Reiterleiste war eine Schleife.** Damit war sie für
+  `hausstandard_pruefen.py` unsichtbar, und die eigene Prüfzeile im Reiter Test
+  meldete auf jeder Installation „Leiste 0, Bereiche 5, Liste 5" — ein
+  Daueralarm, der nichts bedeutete. Die Leiste ist ausgeschrieben.
+* **Der Speichern-Knopf war grün** und stand unter einer Legende, die Grün als
+  „fragt nur ab, verändert nichts" erklärt. Er ist jetzt orange. Die
+  Vorlage-Knöpfe sind grau statt orange, und die Legende dazu nennt keine
+  zweite Bedeutung für dieselbe Farbe mehr.
+* **Schritt 3 der Loxone-Anleitung** bekam das Abonnement statt einer Zahl
+  eingesetzt und las sich „die vollständige Tabelle hätte `wolf_ng/#` Einträge".
+* **133 von 228 Suchschlüsseln der Datenpunkttabelle waren leer** — gemessen
+  unter PHP 7.4 mit einem deutschen Locale. `strtolower()` arbeitet byteweise
+  und zerstörte die Umlaute, und `htmlspecialchars()` machte aus dem
+  ungültigen UTF-8 stillschweigend eine leere Zeichenkette. Betroffen war jeder
+  Datenpunkt mit Umlaut im Namen; über das Suchfeld war er nicht mehr zu finden.
+* Der Rollbehälter breiter Tabellen wirkte nicht (`min-width` fehlte), ein
+  abgewiesenes Formular sprang auf den falschen Reiter zurück, zwei Hinweistexte
+  sagten etwas zu, was der Code nicht tut, und acht Sprachschlüssel waren tot.
+* Der Reiter Test rät nicht mehr jedem Anwender zur Firmware 1.9. Die
+  Kandidatenliste lief absteigend, und weil die fünf Tabellen echte Obermengen
+  ineinander sind, traf 1.9 immer zuerst.
+
+### Installation und Betrieb
+
+* `bin/wolf_server` leitet seinen Pfad aus dem eigenen Ablageort ab statt aus
+  `${LBPBIN}/wolf_ng`. War `LBPBIN` nicht gesetzt, startete `start` nichts und
+  meldete trotzdem Erfolg, und `stop` beendete nichts und meldete ebenfalls
+  Erfolg. Bei einer Zweitinstallation bediente das zweite Exemplar das erste.
+* `start` und `restart` messen jetzt die Wirkung, statt den Rückgabewert eines
+  Hintergrundstarts zu lesen. Dasselbe gilt für den Protokollordner des
+  Watchdogs.
+* Der Cron startet den Dienst als `loxberry`, nicht als root — sonst gehören
+  Protokoll- und Zustandsdatei danach root, und die Oberfläche kommt nicht mehr
+  daran.
+* Die mitgelieferte `config/wolf_ism8i.conf` führt jetzt alle fünfzehn
+  Einstellungen; `postinstall.sh` rechnet ihre Prüfsumme, statt sie
+  einzutragen.
+* Der Online-Zustand geht nicht mehr per UDP hinaus, wenn die Direktausgabe
+  ausgeschaltet ist.
+
+### Nicht gemessen — und deshalb nicht behauptet
+
+Es gibt weiterhin kein WOLF-Gerät und kein ISM8. Ungeprüft bleiben: ob
+Datenpunkt 372 die Nummer aus der Gerätetabelle sendet, ob das ISM8 den
+Vollabzug hinter `F0 D0` annimmt, ob das MQTT-Gateway eine leere Nutzlast als
+Löschung weiterreicht, und wie die Oberfläche im LoxBerry-Rahmen aussieht.
+
+## Version 3.0.10 — der Abo-Text folgt der Gateway-Fassung
+
+Der Reiter MQTT nannte bis dahin für beide Gateway-Fassungen denselben Schritt.
+Jetzt steht die Themengruppe zuerst als eigene Zeile, und darunter genau der
+Satz, der zur gemessenen Fassung passt: unter Gateway 1 die Aufforderung, das
+Abonnement einzutragen, mit dem Hinweis, dass ohne diesen Eintrag am Miniserver
+nichts ankommt; unter Gateway 2 die Feststellung, dass dort nichts einzutragen
+ist. Ist die Fassung nicht lesbar, stehen beide Sätze da — eine Fassung zu
+behaupten wäre für die Hälfte der Anlagen falsch.
+
 ## Version 3.0.9 — Störcodes im Klartext, und ein stiller Fehler behoben
 
 ### Zuerst der Fehler, denn er betrifft jede laufende 3.0.8

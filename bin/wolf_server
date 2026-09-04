@@ -14,7 +14,23 @@
 
 . $LBHOMEDIR/libs/bashlib/loxberry_log.sh
 
-BINPATH=${LBPBIN}/wolf_ng
+# Der eigene Ablageort, nicht ${LBPBIN}/<fester Name>.
+#
+# Gemessen am 04.09.2026 mit einer Attrappe des Watchdogs:
+#   LBPBIN gesetzt, Skript unter wolf_ng     -> startet wolf_ng     RC=0
+#   LBPBIN NICHT gesetzt                     -> startet NICHTS      RC=0
+#   Skript unter wolf_ng_01, LBPBIN gesetzt  -> startet wolf_ng     RC=0
+#
+# Der zweite Fall ist der gefaehrliche: start meldete Erfolg, ohne
+# etwas zu starten, und stop beendete nichts und meldete ebenfalls
+# Erfolg, weil die Wirkungsmessung mit demselben falschen Pfad sucht.
+# Der dritte ist der Zweitinstallations-Fall, vor dem die plugin.cfg
+# selbst warnt: LoxBerry haengt bei einer Namenskollision _01 an.
+BINPATH=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
+if [ -z "$BINPATH" ] || [ ! -f "$BINPATH/wolf_watchdog.sh" ]; then
+    echo "Wolf ISM8i: eigener Ablageort nicht bestimmbar - Abbruch." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Prozesssuche - bitte nicht auf pkill zurueckbauen
@@ -66,7 +82,17 @@ case "$1" in
   'start')
     echo "Starting Wolf ISM8i server"
     ${BINPATH}/wolf_watchdog.sh &
-    RETVAL=$?
+    # RETVAL=$? unmittelbar nach "&" misst den Hintergrundstart, nicht
+    # den Lauf: "false &" ergibt 0, "/gibtesnicht &" ebenso. Der
+    # stop-Zweig wurde deshalb schon in 3.0.8 auf Wirkungsmessung
+    # umgebaut - start und restart blieben stehen. Jetzt nicht mehr.
+    sleep 1
+    if wolf_laeuft "${BINPATH}/wolf_watchdog.sh"; then
+        RETVAL=0
+    else
+        echo "WARNUNG: der Watchdog laeuft nach dem Start nicht."
+        RETVAL=1
+    fi
     ;;
   'stop')
     echo "Stopping Wolf ISM8i server"
@@ -87,10 +113,17 @@ case "$1" in
     echo "Restarting Wolf ISM8i server"
     wolf_beenden "${BINPATH}/wolf_watchdog.sh"
     wolf_beenden "${BINPATH}/wolf_ism8i.pl"
-    RETVAL=$?
-	sleep 1
+    # Hier stand ein RETVAL=$? nach wolf_beenden - eine tote
+    # Zuweisung, drei Zeilen spaeter ueberschrieben.
+    sleep 1
     ${BINPATH}/wolf_watchdog.sh &
-    RETVAL=$?
+    sleep 1
+    if wolf_laeuft "${BINPATH}/wolf_watchdog.sh"; then
+        RETVAL=0
+    else
+        echo "WARNUNG: der Watchdog laeuft nach dem Neustart nicht."
+        RETVAL=1
+    fi
     ;;
   'status')
     # status hat bis 3.0.7 nur den Watchdog angesehen. Der kann laufen,

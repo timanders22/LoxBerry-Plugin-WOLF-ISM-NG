@@ -71,8 +71,23 @@ else
     SICHERUNG="/tmp/${PDIR}.SAVE"
 fi
 mkdir -p "$SICHERUNG"
-# Den benutzten Ort hinterlegen, damit postupgrade.sh ihn nicht raten muss.
-echo "$SICHERUNG" > "$PCONFIG/.upgrade_pfad" 2>/dev/null
+
+# HIER STAND EIN MERKER .upgrade_pfad IM KONFIGURATIONSORDNER, den
+# postupgrade.sh als ersten von drei Wegen lesen sollte - mit der
+# Begruendung, ihn dort erneut zu erraten waere "die eine Stelle, an der
+# beide Skripte auseinanderlaufen koennten".
+#
+# Er kann dort nie ankommen: purge_installation entfernt genau dieses
+# Verzeichnis, bevor postupgrade laeuft. Nachgestellt: nach preupgrade da,
+# nach dem Abraeumen weg. Der Zweig war tot und das rm -f darauf ebenfalls.
+#
+# Gefaehrlich war es nicht - der Rueckfall auf $PTEMPPATH traegt -, aber die
+# Zusicherung sagte das Gegenteil dessen, was der Code tut. Beide Skripte
+# rechnen den Pfad aus DEMSELBEN Argument aus, und das ist die eine Stelle,
+# an der sie nicht auseinanderlaufen koennen.
+#
+# Ausgebaut am 02.09.2026. Die Schwesterlinie Smartmeter classic hatte
+# denselben Merker schon in 2.3.14 aus demselben Grund entfernt.
 
 echo "<INFO> Backing up existing config files $PCONFIG/* -> $SICHERUNG/"
 cp -p -r "$PCONFIG/." "$SICHERUNG/" 2>/dev/null || true
@@ -81,7 +96,8 @@ cp -p -r "$PCONFIG/." "$SICHERUNG/" 2>/dev/null || true
 # ==== NETZ-EINSTELLUNGEN-UPDATE (automatisch eingefuegt, nicht doppeln) ====
 # Zweitschrift NEBEN den Konfigurationsordner, zusaetzlich zur bisherigen
 # Sicherung. Grund: der Installer kopiert config/* aus dem Archiv ueber
-# config/plugins/<ordner> (plugininstall.pl Zeile 899, cp -r ohne -n) und
+# config/plugins/<ordner> (plugininstall.pl Zeile 920, cp -r ohne -n;
+# nachgemessen 04.09.2026 - in :899 steht der PREINSTALL-Zweig) und
 # ueberschreibt dabei die Datei des Nutzers. Bisher haing die Rettung allein
 # an postupgrade.sh. Laeuft das aus irgendeinem Grund nicht durch, greift
 # jetzt postinstall.sh auf diese Zweitschrift zu - sie liegt ausserhalb des

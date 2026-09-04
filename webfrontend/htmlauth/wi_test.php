@@ -17,6 +17,9 @@
  */
 
 require_once __DIR__ . '/wi_lib.php';
+// Die Pruefzeilen des SG-Moduls brauchen dessen Funktionen. require_once,
+// nicht require: index.php laedt die Datei ebenfalls.
+require_once __DIR__ . '/wi_sg.php';
 
 /** Shell-Befehl ausfuehren und Ausgabe einsammeln. */
 function wi_sh($cmd)
@@ -136,7 +139,10 @@ function wi_pruefzeilen($cfg)
         $zeile = trim($zeile);
         if ($zeile === '' || $zeile[0] === '#') { continue; }
         $f = preg_split('/\s+/', $zeile);
-        if (count($f) === 2) { $vorhanden[strtolower($f[0])] = true; }
+        // count($f) === 1 heisst "Schluessel da, Wert leer" - dieselbe Regel
+        // wie in wi_config_read(). Sonst meldete diese Zeile den Werkszustand
+        // von 'stoercodes' als Luecke.
+        if (count($f) === 1 || count($f) === 2) { $vorhanden[strtolower($f[0])] = true; }
     }
     $soll = array_keys(wi_defaults());
     $lueck = array();
@@ -231,11 +237,66 @@ function wi_pruefzeilen($cfg)
 
     // --- Die erzeugten Vorlagen -------------------------------------------
     list($ok, $txt) = wi_vorlagen_pruefen($cfg);
-    $z[] = array($ok ? 1 : 0, wi_t('PZ.VORLAGEN'), $txt);
+    $z[] = array($ok === -1 ? -1 : ($ok ? 1 : 0), wi_t('PZ.VORLAGEN'), $txt);
 
     // --- Reiterleiste, Bereiche und Positivliste gegeneinander -------------
     list($ok2, $txt2) = wi_reiter_pruefen();
-    $z[] = array($ok2 ? 1 : 0, wi_t('PZ.REITER'), $txt2);
+    $z[] = array($ok2 === -1 ? -1 : ($ok2 ? 1 : 0), wi_t('PZ.REITER'), $txt2);
+
+    // --- Steht zu JEDER Einstellung eine Wertpruefung bereit? --------------
+    // wi_wert_taugt() ist die gemeinsame Positivliste von Formular und
+    // Zurueckspielen. Waechst wi_defaults(), ohne dass sie mitwaechst, faellt
+    // der neue Schluessel beim Zurueckspielen still durch - deshalb zaehlt
+    // diese Zeile beide Mengen gegeneinander.
+    $luecken = wi_wertpruefung_luecken();
+    $z[] = array($luecken ? 0 : 1, wi_t('PZ.WERTPRUEFUNG'),
+                 $luecken ? sprintf(wi_t('PZ.WERTPRUEFUNG_FEHLT'), implode(', ', $luecken))
+                          : sprintf(wi_t('PZ.WERTPRUEFUNG_OK'), count(wi_defaults())));
+
+    // --- Sichern und Zurueckspielen als Rundlauf --------------------------
+    list($ok4, $txt4) = wi_sicherung_rundlauf($cfg);
+    $z[] = array($ok4 ? 1 : 0, wi_t('PZ.RUNDLAUF'), $txt4);
+
+    // --- Retain: Oberflaeche gegen den Dienst ------------------------------
+    list($ok5, $txt5) = wi_zustandstypen_pruefen();
+    $z[] = array($ok5 === null ? -1 : ($ok5 ? 1 : 0), wi_t('PZ.RETAIN'), $txt5);
+
+    /* --- SG-Ready (V24) --------------------------------------------------
+     *
+     * Zwei Zeilen, und beide pruefen zuerst, ob es etwas zu pruefen gibt.
+     * Ausgeschaltet ist der Auslieferungszustand und weder Erfolg noch
+     * Fehler - also der Strich. */
+    if (wi_cfg($cfg, 'sg_ein', '0') !== '1') {
+        $z[] = array(-1, wi_t('PZ.SG'), wi_t('PZ.SG_AUS'));
+    } else {
+        $sgl = wi_sg_lage($cfg);
+        if ($sgl['fehlt']) {
+            $z[] = array(0, wi_t('PZ.SG'),
+                         sprintf(wi_t('PZ.SG_FEHLT'), implode(', ', $sgl['fehlt'])));
+        } elseif (!$sgl['preise']) {
+            $z[] = array(0, wi_t('PZ.SG'), wi_t('PZ.SG_KEINE_PREISE'));
+        } else {
+            $z[] = array(1, wi_t('PZ.SG'),
+                         sprintf(wi_t('PZ.SG_OK'), count($sgl['preise']),
+                                 count($sgl['fenster']),
+                                 wi_t('SG.LAGE_' . strtoupper($sgl['lage']))));
+        }
+        // Das Dimmsignal bekommt eine eigene Zeile: sein Ausfall ist etwas
+        // anderes als ein fehlender Preis, und er darf nicht in derselben
+        // Zeile untergehen.
+        list($d14, $a14, $h14) = wi_sg_14a($cfg);
+        /* Gruen NUR, wenn das Signal wirklich frisch ist. Der erste Anlauf
+         * dieser Zeile fragte "$d14 === null" und war damit auch bei einem
+         * VERALTETEN Signal gruen - denn veraltet liefert false, nicht null.
+         * Ein Haken neben dem Satz "das Signal ist veraltet" ist genau der
+         * Fehlalarm-Typ, den diese Fassung sonst ueberall beseitigt.
+         * Ausgeschaltet ist der Strich, alles andere ausser frisch das Kreuz. */
+        $frisch = in_array($h14, array('SG.E14_AKTIV', 'SG.E14_RUHE'), true);
+        $z[] = array($h14 === 'SG.E14_AUS' ? -1 : ($frisch ? 1 : 0),
+                     wi_t('PZ.SG14'),
+                     wi_t($h14) . ($a14 >= 0 ? ' ' . sprintf(wi_t('PZ.SG14_ALTER'),
+                                                             wi_alter_text($a14)) : ''));
+    }
 
     // --- Betriebsart-Tabellen gegen das Perl ------------------------------
     list($ok3, $txt3) = wi_arten_pruefen($fw);
@@ -244,12 +305,84 @@ function wi_pruefzeilen($cfg)
     return $z;
 }
 
+/**
+ * Sichern und Zurueckspielen als RUNDLAUF: die Datei, die der eine Knopf
+ * ausliefert, dem anderen vorlegen.
+ *
+ * Bis 3.0.10 scheiterte genau das im Werkszustand. wi_konfig_text() schreibt
+ * den leeren Vorgabewert von 'stoercodes' als Zeile mit nur einem Feld, und
+ * wi_konfig_einlesen() zaehlte eine solche Zeile als Beanstandung - womit die
+ * GANZE Datei abgelehnt wurde. Auf jeder frischen Anlage war der Umzug auf
+ * einen zweiten LoxBerry damit unmoeglich, und die Meldung zeigte auf eine
+ * Einstellung, die der Anwender nie angefasst hatte.
+ *
+ * Diese Zeile misst das Erzeugnis, nicht den Quelltext.
+ */
+function wi_sicherung_rundlauf($cfg)
+{
+    $txt = wi_konfig_text($cfg);
+    list($neu, $mangel) = wi_konfig_einlesen($txt);
+    if ($neu === null) {
+        return array(false, sprintf(wi_t('PZ.RUNDLAUF_NEIN'),
+                                    count($mangel), strip_tags((string) $mangel[0])));
+    }
+    $soll = count(wi_defaults());
+    if (count($neu) !== $soll) {
+        return array(false, sprintf(wi_t('PZ.RUNDLAUF_ZAHL'), count($neu), $soll));
+    }
+    return array(true, sprintf(wi_t('PZ.RUNDLAUF_JA'), $soll));
+}
+
+/**
+ * Retain: die Typenliste der Oberflaeche gegen die des Dienstes.
+ *
+ * Beide Seiten muessen dieselben KNX-Typen fuer Zustaende halten, sonst sagt
+ * die Namenstabelle etwas anderes, als der Dienst tut. Die Listen stehen
+ * zwangslaeufig zweimal da - ueber die Sprachgrenze hinweg gibt es keine
+ * gemeinsame Funktion -, also werden sie gezaehlt.
+ */
+function wi_zustandstypen_pruefen()
+{
+    $p = wi_paths();
+    $kandidaten = array($p['bindir'] . '/wolf_ism8i.pl',
+                        dirname(dirname(__DIR__)) . '/bin/wolf_ism8i.pl');
+    $quelle = '';
+    foreach ($kandidaten as $k) {
+        if (is_file($k)) {
+            $quelle = (string) @file_get_contents($k);
+            break;
+        }
+    }
+    if ($quelle === '') {
+        return array(null, wi_t('PZ.RETAIN_UNLESBAR'));
+    }
+    if (!preg_match('/our\s+@ZUSTAND_TYPEN\s*=\s*\((.*?)\);/s', $quelle, $m)) {
+        return array(null, wi_t('PZ.RETAIN_KEINE_LISTE'));
+    }
+    preg_match_all('/"([A-Za-z0-9_]+)"/', $m[1], $t);
+    $dienst = $t[1];
+    $ober = wi_zustandstypen();
+    sort($dienst);
+    sort($ober);
+    if (!$dienst) {
+        return array(null, wi_t('PZ.RETAIN_KEINE_LISTE'));
+    }
+    if ($dienst !== $ober) {
+        $nur_o = array_diff($ober, $dienst);
+        $nur_d = array_diff($dienst, $ober);
+        return array(false, sprintf(wi_t('PZ.RETAIN_NEIN'),
+            $nur_o ? implode(', ', $nur_o) : '-',
+            $nur_d ? implode(', ', $nur_d) : '-'));
+    }
+    return array(true, sprintf(wi_t('PZ.RETAIN_JA'), count($ober)));
+}
+
 /** Alle vier Vorlagen erzeugen und durch simplexml_load_string schicken. */
 function wi_vorlagen_pruefen($cfg)
 {
     $dps = wi_datenpunkte(wi_cfg($cfg, 'fw_version', '1.8'));
     if (!$dps) {
-        return array(false, wi_t('PZ.VORLAGEN_KEINE_DP'));
+        return array(-1, wi_t('PZ.VORLAGEN_KEINE_DP'));
     }
     $geraete = wi_geraete($dps);
     $eins = array($geraete[0]);
@@ -269,7 +402,7 @@ function wi_vorlagen_pruefen($cfg)
         if ($x === false) { $schlecht[] = $art; } else { $gut++; }
     }
     if ($gut === 0) {
-        return array(false, wi_t('PZ.VORLAGEN_NICHTS'));
+        return array(-1, wi_t('PZ.VORLAGEN_NICHTS'));
     }
     return array(!$schlecht,
         $schlecht ? sprintf(wi_t('PZ.VORLAGEN_KAPUTT'), implode(', ', $schlecht))
@@ -287,7 +420,7 @@ function wi_reiter_pruefen()
 {
     $q = (string) @file_get_contents(__DIR__ . '/index.php');
     if ($q === '') {
-        return array(false, wi_t('PZ.REITER_UNLESBAR'));
+        return array(-1, wi_t('PZ.REITER_UNLESBAR'));
     }
     preg_match_all('/data-pane="(tab-[a-z0-9]+)"/', $q, $a);
     preg_match_all('/class="sm-pane[^"]*"[^>]*id="(tab-[a-z0-9]+)"/', $q, $b);
@@ -371,7 +504,12 @@ function wi_test_ausfuehren($was)
             $zeilen = wi_log_tail($datei, 400);
             $treffer = array();
             foreach ($zeilen as $z) {
-                if (preg_match('/\d{1,3}\s*;|wolf_ng\//u', $z)) {
+                // Das Themen-Praefix ist einstellbar. Fest verdrahtet zaehlte diese
+                // Zeile nach einem Wechsel nichts mehr - sie suchte einen
+                // Namen, den der Dienst nicht mehr benutzt.
+                $muster = '/\d{1,3}\s*;|'
+                        . preg_quote(wi_praefix() . '/', '/') . '/u';
+                if (preg_match($muster, $z)) {
                     $treffer[] = $z;
                 }
                 if (count($treffer) >= 60) {
@@ -393,7 +531,13 @@ function wi_test_ausfuehren($was)
             $t  = sprintf(wi_t('PRUEF.TH_KOPF'), $fw, count($dps)) . "\n";
             $t .= sprintf(wi_t('PRUEF.TH_MQTT'),
                 wi_cfg($cfg, 'mqtt', '0') === '1' ? wi_t('PRUEF.EIN') : wi_t('PRUEF.AUS_GROSS')) . "\n\n";
-            $t .= "wolf_ng/online\n";
+            // Das EINGESTELLTE Praefix, nicht der Vorgabename - und alle DREI
+            // Lebenszeichen-Themen. Bis 3.0.10 nannte diese Liste 221
+            // Themen, waehrend der Dienst 223 sendet und die Tabelle im
+            // Reiter MQTT 223 zeigte: drei Auflistungen, drei Zahlen.
+            $t .= wi_praefix() . "/online\n";
+            $t .= wi_praefix() . "/zeitstempel\n";
+            $t .= wi_praefix() . "/zaehler\n";
             // Uhrzeit- und Datumstypen bleiben weg: der Dienst
             // veroeffentlicht sie nicht (wolf_ism8i.pl, @ignored_types).
             // Bis 3.0.7 standen sie in dieser Liste - in Firmware 1.9 acht

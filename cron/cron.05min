@@ -13,7 +13,7 @@
 # DREI DINGE, DIE DIESES SKRIPT EINHAELT
 #
 #  1. Die Pfade kommen aus REPLACELBP*, nicht aus einer Rechnung mit ".." und
-#     nicht aus einem fest verdrahteten /opt/loxberry. Der Installer ersetzt
+#     nicht aus einem fest verdrahteten Systempfad. Der Installer ersetzt
 #     die Platzhalter beim Einbau.
 #  2. Es SCHWEIGT im Normalfall. Ein Cron, der in den Systemlogger schreibt,
 #     erzeugt sonst 288 Zeilen am Tag.
@@ -50,10 +50,35 @@ wolf_laeuft() {
     return 1
 }
 
+# --- SG-Ready und Paragraph 14a (V24, neu in 3.1.0) ---
+#
+# Der Lauf beendet sich selbst sofort, wenn sg_ein auf 0 steht - das ist
+# der Werkszustand. Er schreibt dann weder ins Protokoll noch an die
+# Heizung. Fuenf Minuten sind fuer einen Plan, der stuendlich wechselt,
+# reichlich genau; ein Ladefenster faengt hoechstens vier Minuten zu
+# spaet an.
+if [ -x /usr/bin/php ] || command -v php >/dev/null 2>&1; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su loxberry -s /bin/sh -c "php '$BINPATH/wolf_sg.php' --einmal" >/dev/null 2>&1
+    else
+        php "$BINPATH/wolf_sg.php" --einmal >/dev/null 2>&1
+    fi
+fi
+
+
 wolf_laeuft "$BINPATH/wolf_watchdog.sh" && exit 0
 
 # --- Er laeuft nicht. Nachstarten und EINMAL sagen, warum. ---
 echo "Wolf ISM8: der Watchdog lief nicht - wird nachgestartet."
-"$BINPATH/wolf_server" start > /dev/null 2>&1
+# Als loxberry nachstarten, nicht als root. LoxBerry fuehrt die
+# Plugin-Crons je nach Ablage als root aus; der Dienst legte danach
+# Protokoll- und Zustandsdatei mit root-Eigentum an, und die
+# Oberflaeche konnte sie nicht mehr ueberschreiben. daemon/daemon
+# steigt aus demselben Grund ab.
+if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+    su loxberry -s /bin/sh -c "'$BINPATH/wolf_server' start" > /dev/null 2>&1
+else
+    "$BINPATH/wolf_server" start > /dev/null 2>&1
+fi
 
 exit 0

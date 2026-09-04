@@ -31,7 +31,11 @@ wolf_beenden() {
 }
 
 SCRIPTPATH=`dirname "$0"`;
-PACKAGE=wolf_ng
+# Der Ordnername kommt aus dem eigenen Ablageort. Fest verdrahtet
+# schrieb eine Zweitinstallation (wolf_ng_01) ihr Protokoll in den
+# Ordner der ersten - dieselbe Bauart wie in bin/wolf_server.
+PACKAGE=$(basename "$(cd "$SCRIPTPATH" 2>/dev/null && pwd)")
+[ -n "$PACKAGE" ] || PACKAGE=wolf_ng
 NAME=watchdog
 LOGDIR=${LBPLOG}/${PACKAGE}
 ADDTIME=1

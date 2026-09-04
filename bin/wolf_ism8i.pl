@@ -74,6 +74,7 @@ sub js_str;
 sub loadDatenpunkte;
 sub writeDatenpunkteToLog;
 sub getDatenpunkt($$);
+sub ist_zustand($);
 sub getCsvResult($$);
 sub parseInput($);
 sub pdt_knx_float($);
@@ -86,6 +87,24 @@ sub pdt_date($);
 
 my $script_path = dirname(__FILE__);
 my $fw_actualize = time - 1;
+
+# Welche KNX-Typen einen Zustand tragen (retained) und welche einen Messwert
+# mit Zeitbezug (nicht retained). Steht an EINER Stelle, damit Sendecode und
+# Oberflaeche nicht auseinanderlaufen; die Oberflaeche liest dieselbe Liste
+# ueber wi_ist_zustand() in wi_lib.php nach, und der Reiter Test zaehlt sie
+# gegeneinander.
+our @ZUSTAND_TYPEN = (
+    "DPT_Switch", "DPT_Bool", "DPT_Enable", "DPT_OpenClose",
+    "DPT_HVACMode", "DPT_DHWMode", "DPT_HVACContrMode",
+    "DPT_Value_1_Ucount", "DPT_Value_2_Ucount",
+);
+
+# Unter welchem Praefix das laufende Abonnement und der letzte Wille stehen.
+# Bis 3.0.10 gab es das nicht: connect_MQTT() lief genau einmal, und nach
+# einer Praefix-Aenderung per SIGHUP veroeffentlichte der Dienst unter dem
+# neuen Praefix, hoerte aber weiter auf das alte.
+my $mqtt_praefix = '';
+
 my @datenpunkte;
 my %letzter_wert;      # zuletzt gesendeter Wert JE Datenpunkt (B5)
 my $igmp_sock;
@@ -205,8 +224,15 @@ sub connect_MQTT
         # und gab dann endgueltig auf.
         $mqtt = mqtt_connect();
         if ($mqtt) {
-            $mqtt->last_will("$hash{praefix}/online", "0");
+            # Der letzte Wille geht RETAINED hinaus. Ohne den dritten
+            # Parameter bekommt ihn nur, wer im Augenblick des Abbruchs
+            # verbunden ist - ein Miniserver, der sich danach verbindet,
+            # liest die alte retained "1" und haelt den toten Dienst fuer
+            # gesund. Der Hilfetext MQTT.B_ONLINE sagt das Gegenteil zu;
+            # jetzt haelt der Code, was er verspricht.
+            $mqtt->last_will("$hash{praefix}/online", "0", 1);
             $mqtt->subscribe("$hash{praefix}/#", \&received_MQTT);
+            $mqtt_praefix = $hash{praefix};
         } else {
             LOGWARN("Keine Verbindung zum MQTT-Broker. Der Server laeuft "
                   . "weiter; MQTT-Werte gehen bis auf Weiteres nicht hinaus.");
@@ -214,17 +240,48 @@ sub connect_MQTT
     }
 }
 
-sub publish_MQTT($$$)
+sub publish_MQTT($$$;$)
+# Hausstandard seit 03.09.2026: Zustaende retained, Messwerte mit Zeitbezug
+# NICHT, das Lebenszeichen nie.
+#
+# Bis 3.0.10 ging jeder Wert retained hinaus - alle vier Sendestellen riefen
+# ->retain, ->publish kam im ganzen Dienst nicht vor. Wirkung: rund hundert
+# Messwerte (Vorlauf-, Kessel-, Aussentemperatur, Druecke, Modulationsgrad)
+# standen dauerhaft im Broker, und ein Miniserver, der sich verband, waehrend
+# die Heizung ruhte, bekam einen Wert von vorgestern, den er von einem
+# frischen nicht unterscheiden konnte.
+#
+# Der vierte Parameter sagt, was der Wert IST. Er ist nicht wahlfrei: die
+# Entscheidung faellt an der Aufrufstelle aus dem KNX-Datenpunkttyp, damit
+# Sendecode und Namenstabelle dieselbe Quelle haben.
 {
     my $id = $_[0];
     my $topic = $_[1];
     my $value = $_[2];
-    $mqtt_values{$topic} = [$id, $value];
+    my $retain = defined $_[3] ? $_[3] : 0;
+    $mqtt_values{$topic} = [$id, $value, $retain];
     LOGDEB(encode('UTF-8', "Saving state for topic $topic: $id: $value"));
     if ($mqtt) {
-        LOGINF(encode('UTF-8', "publish Data: $id on MQTT topic $topic: $value"));
-        $mqtt->retain($topic, $value);
+        LOGINF(encode('UTF-8', "publish Data: $id on MQTT topic $topic: $value"
+                              . ($retain ? " (retained)" : "")));
+        if ($retain) { $mqtt->retain($topic, $value); }
+        else         { $mqtt->publish($topic, $value); }
     }
+}
+
+sub ist_zustand($)
+# Traegt dieser KNX-Datenpunkttyp einen ZUSTAND (retained) oder einen
+# MESSWERT mit Zeitbezug (nicht retained)?
+#
+# Zustaende: Schalter, Freigaben, Betriebsarten und die beiden Zaehltypen -
+# ihr letzter Wert bleibt richtig, bis ein neuer kommt, und Loxone soll ihn
+# nach einem Neustart des Miniservers sofort wieder haben.
+# Messwerte: Temperatur, Druck, Leistung, Durchfluss, Modulationsgrad,
+# Energie - ein alter Wert sieht dort aus wie ein frischer.
+{
+    my $typ = defined $_[0] ? $_[0] : '';
+    return 1 if grep { $_ eq $typ } @ZUSTAND_TYPEN;
+    return 0;
 }
 
 sub received_MQTT
@@ -241,6 +298,7 @@ sub received_MQTT
     }
     my $id = $mqtt_values{$topic}[0];
     my $value = $mqtt_values{$topic}[1];
+    my $retain = defined $mqtt_values{$topic}[2] ? $mqtt_values{$topic}[2] : 0;
     LOGDEB(encode('UTF-8', "Saved state for topic: $id: $value"));
     if ($value eq $message) {
         LOGDEB("Value didn't change. Ignoring...");
@@ -269,7 +327,7 @@ sub received_MQTT
         }
     } else {
         LOGINF(encode('UTF-8', "resetting MQTT to previous state: $id topic $topic: $value"));
-        publish_MQTT($id, $topic, $value);
+        publish_MQTT($id, $topic, $value, $retain);
     }
 }
 
@@ -322,7 +380,13 @@ sub send_OnlineState($)
             LOGINF("publish online state to MQTT topic $hash{praefix}/online: $online");
             $mqtt->retain("$hash{praefix}/online", $online);
         }
-        send_IGMPmessage("online;".$online);
+        # Dieselbe Wache wie beim Lebenszeichen weiter unten. Ohne sie ging
+        # der Online-Zustand auch bei ausgeschalteter Direktausgabe an die
+        # Multicast-Gruppe - bei der Werkseinstellung (output none, mqtt 1)
+        # als einziges Datagramm ueberhaupt, dorthin, wo es niemand erwartet.
+        if ($hash{output} ne 'none') {
+            send_IGMPmessage("online;".$online);
+        }
         $online_gesendet = 1;
     }
     $online_state = $online;
@@ -548,8 +612,12 @@ sub start_event_loop($$) {
             $herzschlag_letzt = $jetzt;
             $zaehler_umlauf = ($zaehler_umlauf + 1) % 1000;
             if ($hash{mqtt} eq '1' and $mqtt) {
-                $mqtt->retain("$hash{praefix}/zeitstempel", $jetzt);
-                $mqtt->retain("$hash{praefix}/zaehler", $zaehler_umlauf);
+                # NICHT retained: das Lebenszeichen ist die Ausfallerkennung.
+                # Retained zeigte es einem neu abonnierenden Empfaenger auch
+                # dann noch einen Zeitstempel und einen Zaehlerstand, wenn
+                # der Dienst laengst tot war - genau das, wogegen es da ist.
+                $mqtt->publish("$hash{praefix}/zeitstempel", $jetzt);
+                $mqtt->publish("$hash{praefix}/zaehler", $zaehler_umlauf);
             }
             # Auf dem UDP-Weg gibt es keinen retained-Speicher; dort ist der
             # umlaufende Zaehler das einzige, woran eine Aenderungs-
@@ -602,9 +670,30 @@ sub start_event_loop($$) {
             my $alt_in    = $hash{inport};
             my $alt_mcp   = $hash{mcport};
             my $alt_fw    = $hash{fw};
+            my $alt_pre   = $hash{praefix};
+            my $alt_mqtt  = $hash{mqtt};
             LOGINF("SIGHUP - Konfiguration wird neu gelesen.");
             loadConfig();
             loadDatenpunkte() if $hash{fw} ne $alt_fw;
+
+            # Abonnement und letzter Wille haengen am Praefix und stehen in
+            # connect_MQTT(). Die lief bis 3.0.10 genau EINMAL beim Start:
+            # nach einer Praefix-Aenderung veroeffentlichte der Dienst unter
+            # dem neuen Praefix und hoerte weiter auf das alte - jeder
+            # MQTT-Schaltbefehl aus Loxone verschwand lautlos, und der letzte
+            # Wille zeigte auf ein Thema, das niemand mehr las.
+            if ($hash{mqtt} eq '1'
+                and ($hash{praefix} ne $alt_pre or $alt_mqtt ne '1' or !$mqtt)) {
+                if ($mqtt and $mqtt_praefix ne '' and $mqtt_praefix ne $hash{praefix}) {
+                    LOGINF("Praefix gewechselt: $mqtt_praefix -> $hash{praefix}. "
+                         . "Das alte Abonnement wird abbestellt.");
+                    eval { $mqtt->unsubscribe("$mqtt_praefix/#"); 1; }
+                        or LOGWARN("Abbestellen von $mqtt_praefix/# misslungen: $@");
+                }
+                $mqtt = undef;
+                %mqtt_values = ();   # sonst gilt der alte Stand fuer neue Themen
+                connect_MQTT();
+            }
             if ($hash{port} ne $alt_port or $hash{inport} ne $alt_in
                 or $hash{mcport} ne $alt_mcp) {
                 LOGWARN("Ein Port hat sich geaendert - dafuer ist ein Neustart "
@@ -773,7 +862,14 @@ sub read_command_messages($$) {
    }
 
    LOGINF("Read command $befehl");
-   my $send_data = parseInput($rec_data);
+   # $befehl, nicht $rec_data: der getrimmte Wert wurde bis 3.0.10 nur fuer
+   # den Antworttext benutzt, geprueft wurden die rohen Daten. Ein Befehl mit
+   # CRLF - die Form, die ein virtueller Loxone-Ausgang je nach Einstellung
+   # schickt - kam damit als "1\r" an und fiel bei DPT_Switch, DPT_Bool,
+   # DPT_Enable, DPT_OpenClose, DPT_HVACMode und DPT_DHWMode durch die
+   # Wertpruefung. Die Zahlentypen fuehren ein \s* im Muster und waren
+   # deshalb unauffaellig - genau das machte den Fehler so schwer zu sehen.
+   my $send_data = parseInput($befehl);
    if ($send_data) {
         $ism8_socket->send($send_data);
         $zaehler{befehle_ok}++;
@@ -1182,7 +1278,9 @@ sub decodeTelegram($)
                                 $value = $DP_value;
                              }
 
-                             publish_MQTT($DP_ID, $topic, $value);
+                             # Der KNX-Typ entscheidet ueber retain - siehe
+                             # ist_zustand() und @ZUSTAND_TYPEN.
+                             publish_MQTT($DP_ID, $topic, $value, ist_zustand($datatype));
                         }
 
                     err:
@@ -1503,6 +1601,23 @@ sub getDatenpunkt($$)
 #Returnt aus dem 2D Array mit Datenpunkten den Datenpunkt als Array mit der übergebenen DP ID.
 #$1 = DP ID , $2 = Index des Feldes (0 = DP ID, 1 = Gerät, 2 = Datenpunkt, 3 = KNX-Datenpunkttyp, 4 = Output/Input, 5 = Einheit)
 {
+   # ZWEI Wachen, beide bis 3.0.10 nicht vorhanden:
+   #
+   # 1. Perl zaehlt negative Feldindizes VOM ENDE. "-1" waehlte damit den
+   #    hoechsten belegten Datenpunkt aus. Unter Firmware 1.5 ist das die
+   #    schreibbare Kesselsolltemperaturvorgabe (208, Out/In) - der Befehl
+   #    "-1;25" wurde angenommen, und createRequest() schrieb die Kennung
+   #    als pack("n",-1) = 0xFFFF ins Telegramm an den Heizungsbus.
+   #    Gemessen am 04.09.2026: unter 1.5 und 1.7 angenommen, unter 1.4,
+   #    1.8 und 1.9 zufaellig abgewiesen - es haengt allein daran, ob der
+   #    hoechste Datenpunkt gerade schreibbar ist.
+   #
+   # 2. $datenpunkte[$gross][$i] legt den Zwischenindex an (Autovivification).
+   #    Eine unbekannte Kennung blaehte das Feld dauerhaft auf: gemessen
+   #    372 -> 65535 -> 300000, in einem Dauerlaeufer mit offenem
+   #    Befehls-Port also Speicherwachstum auf Zuruf von aussen.
+   return "ERR:NotFound" if !defined $_[0] or $_[0] !~ m/^\d+$/;
+   return "ERR:NotFound" if !defined $datenpunkte[$_[0]];
    my $d = $datenpunkte[$_[0]][$_[1]];
    if ( (defined $d) and (length($d)>0) ) { return $d; } else { return "ERR:NotFound"; }
 }
@@ -1624,7 +1739,7 @@ sub getCsvResult($$)
 	 }
    elsif ($datatype eq "DPT_HVACContrMode")
      {
-          my @CGB2_MGK2_TOB = ("Schornsteinferger","Heiz- Warmwasserbetrieb","-","-","-","-","Standby","GLT","-","-","-","Frostschutz","-","-","-","Kalibration");
+          my @CGB2_MGK2_TOB = ("Schornsteinfeger","Heiz- Warmwasserbetrieb","-","-","-","-","Standby","GLT","-","-","-","Frostschutz","-","-","-","Kalibration");
 
           my @BWL1S = ("Antilegionellenfunktion","Heiz- Warmwasserbetrieb","Vorwärmung","Aktive Kühlung","-","-","Standby","GLT","-","-","-","Frostschutz","-","-","-","-");
 
@@ -1650,8 +1765,23 @@ sub parseInput($)
     my @input = split /;/, $_[0];
     my $id = $input[0];
     my $data = $input[1];
+    # Umschliessenden Leerraum hier abschneiden, nicht erst beim Aufrufer:
+    # parseInput hat ZWEI Aufrufer - den TCP-Befehlsport und received_MQTT -,
+    # und der zweite reicht die Nutzlast des Brokers ungefiltert durch. Bis
+    # 3.0.10 fiel ein Befehl mit CRLF bei DPT_Switch, DPT_Bool, DPT_Enable,
+    # DPT_OpenClose, DPT_HVACMode und DPT_DHWMode durch die Wertpruefung,
+    # waehrend die Zahlentypen ihn wegen ihres \s* im Muster annahmen.
+    $id   = defined $id   ? l_r_dbl_trim($id)   : $id;
+    $data = defined $data ? l_r_dbl_trim($data) : $data;
     if (scalar(@input) != 2) {
         LOGERR("Invalid command, expected the format: ID;VALUE");
+        return;
+    }
+    # Die Kennung muss eine Zahl sein, bevor sie als Feldindex dient.
+    # getDatenpunkt() faengt es seit 3.0.11 selbst ab; hier steht die
+    # Meldung, die der Absender zu sehen bekommt.
+    if ($id !~ m/^\d+$/) {
+        LOGERR("Unbrauchbare Datenpunktkennung: '$id' (erwartet eine Zahl)");
         return;
     }
     my $geraet = getDatenpunkt($id, 1);
