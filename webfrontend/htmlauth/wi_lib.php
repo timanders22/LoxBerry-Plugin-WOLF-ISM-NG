@@ -1746,7 +1746,7 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
             // V3: Lebenszeichen. Ohne einen Wert, der sich zuverlaessig
             // aendert, laesst sich ein toter Dienst nicht von einer ruhigen
             // Heizung unterscheiden.
-            array('title' => 'Zaehler (Lebenszeichen)', 'check' => 'zaehler;\\v',
+            array('title' => 'Zähler (Lebenszeichen)', 'check' => 'zaehler;\\v',
                   'min' => '0', 'max' => '999', 'unit' => '<v>', 'analog' => true),
             array('title' => 'Zeitstempel', 'check' => 'zeitstempel;\\v',
                   'min' => '0', 'max' => '2147483647', 'unit' => '<v>', 'analog' => true),

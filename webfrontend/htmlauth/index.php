@@ -528,6 +528,13 @@ if ($wi_frame) {
 .sm-kacheln { display: flex; flex-wrap: wrap; margin: 8px 0; }
 .sm-kachel { background: #fafafa; border: 1px solid #e0e0e0; border-radius: 8px; padding: 8px 14px; margin: 4px 6px 4px 0; min-width: 130px; }
 .sm-kachel b { display: block; font-size: 1.15em; color: #4f7d17; }
+/* Nur die Breite. KEIN eigener Pfeil: LoxBerry 4.0.0.15 zeichnet ihn
+   selbst, und eine eigene appearance/background-image-Regel loescht den
+   vorhandenen, ohne einen zu setzen - so war das Auswahlfeld im
+   Dashboard-Designer ganz ohne Pfeil. Dieselbe eine Zeile steht in
+   BYD-Autos. Ergaenzt 07.09.2026: die Klasse stand seit der
+   Pfeil-Korrektur im HTML, ohne dass es sie noch gab. */
+.sm-wrap .sm-auswahl { max-width: 520px; }
 </style>
 <div class="sm-wrap">
 

@@ -23,7 +23,7 @@ my $sock = IO::Socket::Multicast->new(
            # Namens gibt - das gibt es nicht, der Ausdruck war immer falsch.
            # Gemeint war die Konstante SO_REUSEPORT, und die gibt es nicht
            # auf jeder Plattform. Deshalb wird sie geprueft, nicht geraten.
-           ReusePort => (eval { Socket::SO_REUSEPORT(); 1 } ? 1 : 0),
+           ReusePort => (eval { my $x = Socket::SO_REUSEPORT(); 1 } ? 1 : 0),
   ) or die "ERROR: Cant create socket: $@!";
 
 $sock->mcast_add($mc_addr) or die "ERROR: Couldn't set group: $@!";
