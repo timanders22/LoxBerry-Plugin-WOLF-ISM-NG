@@ -1091,7 +1091,7 @@ sub getCsvResult($$)
 				   
           if ($geraet =~ /CGB-2/ or $geraet =~ /MGK-2/ or $geraet =~ /TOB/ or $geraet =~ /COB-2/ or $geraet =~ /TGB/)
 	    { $v = $CGB2_MGK2_TOB[$dp_val]; }
-	  elsif ($geraet =~ /BWL-1-S/ or $geraet =~ /CHA/ or $geraet =~ /Wärmepumpe/)
+	  elsif ($geraet =~ /BWL-1-S/)
 	   	{ $v = $BWL1S[$dp_val]; }
 
 	  if (defined $v) { $result .= $v; } else { $result .= "ERR:NoResult[".$dp_id."/".$dp_val."]";}
