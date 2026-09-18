@@ -204,6 +204,48 @@ function wi_paths()
 }
 
 /**
+ * Die Marke "eine Aktualisierung dieses Plugins laeuft".
+ *
+ * preupgrade.sh legt sie als Erstes an, postupgrade.sh entfernt sie NACH dem
+ * Dienststart. Sie liegt NEBEN dem Datenordner
+ * (data/plugins/<ordner>.upgrade_laeuft) - im Ordner selbst loeschte
+ * purge_installation sie mit.
+ *
+ * Leere Rueckgabe heisst: der LoxBerry-Ordner ist von hier aus nicht
+ * bekannt, dann gibt es auch keine Marke zu lesen.
+ */
+function wi_upgrade_marke()
+{
+    $p = wi_paths();
+    if ($p['home'] === '') {
+        return '';
+    }
+    return $p['home'] . '/data/plugins/' . $p['plugin'] . '.upgrade_laeuft';
+}
+
+/**
+ * Gilt sie gerade?
+ *
+ * Nur wenn sie lesbar ist, eine Unixzeit enthaelt und hoechstens eine Stunde
+ * alt ist. Aelter oder unlesbar hat eine abgebrochene Installation sie liegen
+ * lassen - dann darf sie die Seite nicht fuer immer sperren. Ein paar Minuten
+ * "Zukunft" sind eine nachgestellte Uhr, keine Luege.
+ */
+function wi_upgrade_laeuft()
+{
+    $f = wi_upgrade_marke();
+    if ($f === '' || !@is_file($f)) {
+        return false;
+    }
+    $roh = trim((string) @file_get_contents($f));
+    if (!preg_match('/^[0-9]{1,12}$/', $roh)) {
+        return false;
+    }
+    $alter = time() - (int) $roh;
+    return $alter > -300 && $alter < 3600;
+}
+
+/**
  * Merkmal gegen fremde Absender.
  *
  * Bis 3.0.7 trug keines der zwoelf Formulare eines. Ein POST von einer

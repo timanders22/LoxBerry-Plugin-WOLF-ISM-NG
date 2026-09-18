@@ -114,6 +114,24 @@ function wi_pruefzeilen($cfg)
     $z[] = array($sv ? 1 : 0, wi_t('PZ.MODUL'),
                  $sv ? sprintf(wi_t('PZ.PID'), $sv) : wi_t('PZ.LAEUFT_NICHT'));
 
+    /* --- Liegt eine Marke einer laufenden Aktualisierung? ----------------
+     *
+     * Drei Ausgaenge, nicht zwei: keine Marke ist der Regelfall, eine
+     * gueltige heisst "gerade laeuft eine Aktualisierung" - das ist weder
+     * gut noch schlecht, sondern voruebergehend -, und eine liegengebliebene
+     * gilt nicht mehr und haelt nichts auf. Zu jeder Regel gehoert das
+     * Werkzeug, das sie findet (CLAUDE.md, Abschnitt 6). */
+    $wi_marke = wi_upgrade_marke();
+    if ($wi_marke === '' || !is_file($wi_marke)) {
+        $z[] = array(1, wi_t('PZ.MARKE'), wi_t('PZ.MARKE_KEINE'));
+    } elseif (wi_upgrade_laeuft()) {
+        $wi_seit = (int) trim((string) @file_get_contents($wi_marke));
+        $z[] = array(-1, wi_t('PZ.MARKE'),
+                     sprintf(wi_t('PZ.MARKE_GILT'), wi_alter_text(time() - $wi_seit)));
+    } else {
+        $z[] = array(0, wi_t('PZ.MARKE'), sprintf(wi_t('PZ.MARKE_ALT'), $wi_marke));
+    }
+
     // --- Perl-Module ------------------------------------------------------
     $module = array('List::MoreUtils', 'IO::Socket::Multicast', 'Math::Round',
                     'Net::MQTT::Simple', 'HTML::Entities', 'IO::Select');
@@ -651,6 +669,19 @@ function wi_test_ausfuehren($was)
             return array(wi_t('PRUEF.T_MQTT'), $t);
 
         case 'restart':
+            // Waehrend einer Aktualisierung wird nichts angefasst: die
+            // Konfiguration ist in dieser Zeit die mitgelieferte Vorgabe, und
+            // ein hier gestarteter Dienst liefe mit falschem ISM8-Port (in
+            // WSL gemessen 18.09.2026, Fall B3). index.php haelt schon am
+            // Eingang an - dies ist die zweite Tuer, weil diese Datei auch
+            // von anderswoher eingebunden werden kann.
+            //
+            // 'stop' bekommt KEINE: ein Anhalten kann keinen zweiten Dienst
+            // erzeugen, und bin/wolf_server laesst es aus demselben Grund
+            // durch (Fall C7s).
+            if (wi_upgrade_laeuft()) {
+                return array(wi_t('PRUEF.T_RESTART'), wi_t('UPGRADE.AKTION'));
+            }
             $a = wi_server('restart');
             sleep(2);
             $t = ($a !== '' ? $a . "\n\n" : '');

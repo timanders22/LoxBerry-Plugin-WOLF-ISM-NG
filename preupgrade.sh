@@ -36,6 +36,30 @@ PVERSION=$4   # Forth argument is Plugin version
               # Base folder of LoxBerry
 PTEMPPATH=$6  # Sixth argument is full temp path during install (see also $1)
 
+# ---------------------------------------------------------------------------
+# Marke "Aktualisierung laeuft" - als Erstes, vor jedem anderen Schritt.
+#
+# Der Installer legt die Cron-Datei neu an, lange bevor postupgrade.sh den
+# Dienst neu startet (an der Einspeisebremse am Geraet gemessen: fast eine
+# Minute, Regeln/06). Ohne die Marke standen nach einer Aktualisierung ZWEI
+# Watchdogs da - in WSL gemessen am 18.09.2026, Fall C8.
+#
+# Sie liegt NEBEN dem Datenordner: purge_installation loescht
+# data/plugins/<ordner>/ mitsamt allem, was darin liegt. Die Argumente sind
+# dieselben wie unten - $3 der Ordner, $5 die LoxBerry-Wurzel.
+# ---------------------------------------------------------------------------
+WI_BASE="${5:-$LBHOMEDIR}"
+WI_PDIR="${3:-wolf_ng}"
+WI_MARKE="$WI_BASE/data/plugins/$WI_PDIR.upgrade_laeuft"
+mkdir -p "$WI_BASE/data/plugins" 2>/dev/null
+date +%s > "$WI_MARKE" 2>/dev/null
+if [ -s "$WI_MARKE" ]; then
+    echo "<OK> Dienststart bis zum Ende der Installation gesperrt."
+else
+    echo "<WARNING> Die Marke $WI_MARKE liess sich nicht anlegen - der"
+    echo "<WARNING> Waechter kann den Dienst waehrend der Installation starten."
+fi
+
 # Combine them with /etc/environment
 PCGI=$LBPCGI/$PDIR
 PHTML=$LBPHTML/$PDIR

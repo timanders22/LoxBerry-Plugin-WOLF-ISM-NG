@@ -33,6 +33,54 @@ if [ -z "$BINPATH" ] || [ ! -f "$BINPATH/wolf_watchdog.sh" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Laeuft gerade eine Aktualisierung dieses Plugins?
+#
+# preupgrade.sh legt die Marke als Erstes NEBEN den Datenordner
+# (<wurzel>/data/plugins/<ordner>.upgrade_laeuft); im Datenordner selbst
+# loeschte purge_installation sie mit. postupgrade.sh entfernt sie NACH dem
+# Dienststart.
+#
+# Warum es das gibt, in WSL gemessen am 18.09.2026
+# (Pruefung-WOLF-ISM-NG-3.1.3/messung_vorher.txt, Fall C8): ohne diese Sperre
+# standen nach einer Aktualisierung ZWEI Watchdogs da. Der Waechter aus
+# cron/cron.05min faellt in das Fenster zwischen dem Beenden und dem Neustart,
+# den postupgrade.sh macht, findet nichts laufen und startet einen eigenen.
+#
+# Nur eine Marke, die hoechstens eine Stunde alt ist, zaehlt. Aelter oder
+# unlesbar hat eine abgebrochene Installation sie liegen lassen - dann gilt
+# sie nicht, sonst stuende das Plugin fuer immer still.
+#
+# WI_START_TROTZ_MARKE=1 setzt nur postupgrade.sh: dort ist die Marke die
+# eigene, und der Start ist der letzte Schritt der Installation.
+# ---------------------------------------------------------------------------
+LBWURZEL=$(cd "$BINPATH/../../.." 2>/dev/null && pwd)
+MARKE=""
+if [ -n "$LBWURZEL" ]; then
+    MARKE="$LBWURZEL/data/plugins/$(basename "$BINPATH").upgrade_laeuft"
+fi
+
+upgrade_laeuft() {
+    [ "${WI_START_TROTZ_MARKE:-0}" = "1" ] && return 1
+    [ -n "$MARKE" ] || return 1
+    [ -f "$MARKE" ] || return 1
+    SEIT=$(cat "$MARKE" 2>/dev/null)
+    case "$SEIT" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    # Die Uhr wird gemessen, nicht angenommen: liefert "date" nichts - unter
+    # Last kann ein fork scheitern -, rechnete die Schale mit einer leeren
+    # Zeichenkette, das Alter wuerde negativ, die Bedingung fiele durch und
+    # der Dienst startete mitten in der Aktualisierung. Ein Schutz faellt
+    # geschlossen aus (Regeln/01): ohne Uhr gilt die Marke.
+    JETZT=$(date +%s 2>/dev/null)
+    case "$JETZT" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
+    ALTER=$(( JETZT - SEIT ))
+    [ "$ALTER" -ge 0 ] && [ "$ALTER" -lt 3600 ]
+}
+
+# ---------------------------------------------------------------------------
 # Prozesssuche - bitte nicht auf pkill zurueckbauen
 #
 # "pkill -f wolf_ism8i.pl" durchsucht die GANZE Befehlszeile jedes Prozesses
@@ -80,21 +128,40 @@ wolf_laeuft() {
 # Carry out specific functions when asked to by the system
 case "$1" in
   'start')
-    echo "Starting Wolf ISM8i server"
-    ${BINPATH}/wolf_watchdog.sh &
-    # RETVAL=$? unmittelbar nach "&" misst den Hintergrundstart, nicht
-    # den Lauf: "false &" ergibt 0, "/gibtesnicht &" ebenso. Der
-    # stop-Zweig wurde deshalb schon in 3.0.8 auf Wirkungsmessung
-    # umgebaut - start und restart blieben stehen. Jetzt nicht mehr.
-    sleep 1
-    if wolf_laeuft "${BINPATH}/wolf_watchdog.sh"; then
+    # ERST fragen, DANN starten. Bis 3.1.3 stand der Start in der ersten
+    # Zeile und wolf_laeuft darunter - als Wirkungsmessung, nicht als
+    # Bedingung. Ein zweiter Aufruf legte deshalb einen zweiten Watchdog an
+    # (in WSL gemessen 18.09.2026, Fall A1b: 2 Prozesse statt 1), und jeder
+    # davon startet ein eigenes Auswertungsmodul auf demselben ISM8-Port.
+    # "start" rufen daemon/daemon beim Systemstart und cron/cron.05min; der
+    # Waechter fragt vorher selbst nach, der Systemstart nicht.
+    if upgrade_laeuft; then
+        echo "Wolf ISM8i: eine Aktualisierung dieses Plugins laeuft - nicht gestartet."
+        RETVAL=0
+    elif wolf_laeuft "${BINPATH}/wolf_watchdog.sh"; then
+        echo "Wolf ISM8i server laeuft bereits - kein zweiter Start."
         RETVAL=0
     else
-        echo "WARNUNG: der Watchdog laeuft nach dem Start nicht."
-        RETVAL=1
+        echo "Starting Wolf ISM8i server"
+        ${BINPATH}/wolf_watchdog.sh &
+        # RETVAL=$? unmittelbar nach "&" misst den Hintergrundstart, nicht
+        # den Lauf: "false &" ergibt 0, "/gibtesnicht &" ebenso. Der
+        # stop-Zweig wurde deshalb schon in 3.0.8 auf Wirkungsmessung
+        # umgebaut - start und restart blieben stehen. Jetzt nicht mehr.
+        sleep 1
+        if wolf_laeuft "${BINPATH}/wolf_watchdog.sh"; then
+            RETVAL=0
+        else
+            echo "WARNUNG: der Watchdog laeuft nach dem Start nicht."
+            RETVAL=1
+        fi
     fi
     ;;
   'stop')
+    # "stop" fragt NICHT nach der Marke. Ein Anhalten kann keinen zweiten
+    # Dienst erzeugen, und postupgrade.sh braucht den Weg: sein "restart"
+    # beendet zuerst. Gegenprobe im Pruefstand: Fall C7s, Rueckgabewert 0
+    # bei liegender Marke.
     echo "Stopping Wolf ISM8i server"
     wolf_beenden "${BINPATH}/wolf_watchdog.sh"
     wolf_beenden "${BINPATH}/wolf_ism8i.pl"
@@ -110,19 +177,29 @@ case "$1" in
     fi
     ;;
   'restart')
-    echo "Restarting Wolf ISM8i server"
-    wolf_beenden "${BINPATH}/wolf_watchdog.sh"
-    wolf_beenden "${BINPATH}/wolf_ism8i.pl"
-    # Hier stand ein RETVAL=$? nach wolf_beenden - eine tote
-    # Zuweisung, drei Zeilen spaeter ueberschrieben.
-    sleep 1
-    ${BINPATH}/wolf_watchdog.sh &
-    sleep 1
-    if wolf_laeuft "${BINPATH}/wolf_watchdog.sh"; then
+    # Auch der Neustart achtet die Marke: der Knopf "Dienst neu starten" im
+    # Reiter Test kommt hier an, und in der Aktualisierungsluecke liefe der
+    # Dienst mit der mitgelieferten Vorgabe-Konfiguration - anderer
+    # ISM8-Port, anderes Themenpraefix (Fall B3). postupgrade.sh setzt
+    # WI_START_TROTZ_MARKE=1 und kommt damit durch.
+    if upgrade_laeuft; then
+        echo "Wolf ISM8i: eine Aktualisierung dieses Plugins laeuft - nicht neu gestartet."
         RETVAL=0
     else
-        echo "WARNUNG: der Watchdog laeuft nach dem Neustart nicht."
-        RETVAL=1
+        echo "Restarting Wolf ISM8i server"
+        wolf_beenden "${BINPATH}/wolf_watchdog.sh"
+        wolf_beenden "${BINPATH}/wolf_ism8i.pl"
+        # Hier stand ein RETVAL=$? nach wolf_beenden - eine tote
+        # Zuweisung, drei Zeilen spaeter ueberschrieben.
+        sleep 1
+        ${BINPATH}/wolf_watchdog.sh &
+        sleep 1
+        if wolf_laeuft "${BINPATH}/wolf_watchdog.sh"; then
+            RETVAL=0
+        else
+            echo "WARNUNG: der Watchdog laeuft nach dem Neustart nicht."
+            RETVAL=1
+        fi
     fi
     ;;
   'status')

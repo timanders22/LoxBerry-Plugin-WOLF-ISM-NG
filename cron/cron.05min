@@ -26,6 +26,43 @@
 BINPATH="REPLACELBPBINDIR"
 CONFIG="REPLACELBPCONFIGDIR/wolf_ism8i.conf"
 
+# --- Laeuft gerade eine Aktualisierung dieses Plugins? ---
+#
+# preupgrade.sh legt die Marke als Erstes neben den Datenordner des Plugins,
+# postupgrade.sh entfernt sie nach dem Dienststart. Der Ordnerpfad kommt aus
+# dem Platzhalter, den der Installer beim Einbau ersetzt.
+#
+# Diese Frage steht ABSICHTLICH vor der nach dem Schalter: in der Luecke ist
+# die Konfiguration weggeraeumt, und auch der SG-Ready-Lauf weiter unten soll
+# dann nicht an die Heizung schreiben.
+#
+# Nur eine Marke, die hoechstens eine Stunde alt ist, zaehlt. Aelter, aus der
+# Zukunft oder unlesbar: eine abgebrochene Installation hat sie liegen
+# lassen, und das Plugin darf nicht fuer immer stillstehen.
+MARKE="REPLACELBPDATADIR.upgrade_laeuft"
+if [ -f "$MARKE" ]; then
+    SEIT=$(cat "$MARKE" 2>/dev/null)
+    case "$SEIT" in
+        ''|*[!0-9]*) SEIT="" ;;
+    esac
+    if [ -n "$SEIT" ]; then
+        # Die Uhr wird gemessen, nicht angenommen: liefert "date" nichts -
+        # unter Last kann ein fork scheitern -, dann rechnet die Schale mit
+        # einer leeren Zeichenkette, das Alter wird negativ, die Bedingung
+        # faellt durch, und der Waechter startet MITTEN in der
+        # Aktualisierung. Ein Schutz faellt geschlossen aus (Regeln/01):
+        # ohne Uhr gilt die Marke. Dieselbe Stelle steht in bin/wolf_server.
+        JETZT=$(date +%s 2>/dev/null)
+        case "$JETZT" in
+            ''|*[!0-9]*) exit 0 ;;
+        esac
+        ALTER=$(( JETZT - SEIT ))
+        if [ "$ALTER" -ge 0 ] && [ "$ALTER" -lt 3600 ]; then
+            exit 0
+        fi
+    fi
+fi
+
 # --- 3. Ausgeschaltet? Dann ist hier nichts zu tun. ---
 enabled=$(awk '/^enable[ \t]/{print $2}' "$CONFIG" 2>/dev/null)
 enabled=${enabled:-0}

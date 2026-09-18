@@ -94,6 +94,15 @@ wolf_beenden "$BINPATH/wolf_ism8i.pl"
 # postinstall.sh spielte sie bei der naechsten Installation zurueck:
 # eine "saubere" Neuinstallation stand danach wieder auf enable 1,
 # den alten Ports und der alten Multicast-Adresse.
+# Die Marke aus preupgrade.sh raeumt der Installer nicht weg - sie liegt
+# NEBEN data/plugins/<ordner>/, und geloescht wird nur der Ordner selbst.
+# Bliebe sie liegen, sperrte sie nach einer Neuinstallation bis zu einer
+# Stunde lang jeden Dienststart.
+MARKE="$BASE/data/plugins/$PDIR.upgrade_laeuft"
+if [ -f "$MARKE" ]; then
+    rm -f "$MARKE" && echo "<OK> Marke der Aktualisierung entfernt."
+fi
+
 ZWEITSCHRIFT="$BASE/config/plugins/$PDIR.backup.wolf_ism8i.conf"
 if [ -f "$ZWEITSCHRIFT" ]; then
     if rm -f "$ZWEITSCHRIFT"; then

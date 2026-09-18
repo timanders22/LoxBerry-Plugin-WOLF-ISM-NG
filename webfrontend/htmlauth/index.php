@@ -48,6 +48,49 @@ if ($wi_p['home']) {
     }
 }
 
+/* ============ Laeuft gerade eine Aktualisierung? ============
+ *
+ * Zwischen preupgrade.sh und postupgrade.sh ist config/plugins/<ordner>/
+ * geloescht (purge_installation). Was diese Seite in dieser Zeit anzeigen
+ * wuerde, sind die VORGABEWERTE - anderer ISM8-Port, anderes Themenpraefix,
+ * Haken aus.
+ *
+ * Gesperrt wird, weil es hier einen gemessenen Schaden gibt, nicht aus
+ * Vorsicht. In WSL gemessen am 18.09.2026, Pruefstand
+ * Pruefung-WOLF-ISM-NG-3.1.3:
+ *   Fall B4  die Seite bot ism8i_port 12004 an - eingestellt war 12777;
+ *   Fall B5  ein Speichern in dieser Zeit meldete Erfolg und war hinterher
+ *            fort: postupgrade.sh legt die gesicherte Datei darueber;
+ *   Fall B3  der Knopf "Dienst neu starten" im Reiter Test startete den
+ *            Dienst mitten in der Aktualisierung (1 Prozess statt 0).
+ * Intercom 2.2.11 sperrt aus demselben Grund; Sprachsteuerung 0.11.7 sperrt
+ * nicht, weil dort in der Luecke nichts verlorenging (Regeln/06).
+ *
+ * Die Pruefung steht VOR dem Wachposten: der ruft wi_formkey(), und das
+ * SCHREIBT eine Datei, wenn noch kein Merkmal da ist. In der Luecke ist
+ * genau das der Fall.
+ */
+if (wi_upgrade_laeuft()) {
+    $wi_frame = class_exists('LBWeb', false);
+    if ($wi_frame) {
+        LBWeb::lbheader('Wolf ISM8 Server', 'https://wiki.loxberry.de/', 'help.html');
+    }
+    echo '<div style="max-width:980px;margin:0 auto;'
+       . 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">' . "\n"
+       . '<h2 style="color:#6dac20">WOLF ISM NG</h2>' . "\n"
+       . '<div style="border-radius:8px;padding:10px 14px;margin:12px 0;'
+       . 'background:#fdf3e3;border:1px solid #e0620d"><b>'
+       . wi_e(wi_t('UPGRADE.TITEL')) . '</b> ' . wi_e(wi_t('UPGRADE.TEXT'));
+    if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        echo '<br>' . wi_e(wi_t('UPGRADE.NICHT_GESPEICHERT'));
+    }
+    echo '</div>' . "\n" . '</div>' . "\n";
+    if ($wi_frame) {
+        LBWeb::lbfooter();
+    }
+    exit;
+}
+
 $wi_saved = false;
 $wi_error = '';
 $wi_hinweis = '';

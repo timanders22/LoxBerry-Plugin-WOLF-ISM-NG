@@ -16,6 +16,45 @@ if [ -x /usr/bin/logger ]; then
     /usr/bin/logger "loxberry-plugin-$pluginname - DAEMON Script from Wolf ISM8 Plugin"
 fi
 
+# Laeuft gerade eine Aktualisierung dieses Plugins? Diese Datei laeuft beim
+# Systemstart; faellt ein Neustart mitten in eine Aktualisierung, ist die
+# Konfiguration weggeraeumt, und der Dienst liefe mit der Vorgabe. Die Marke
+# legt preupgrade.sh NEBEN den Datenordner - im Ordner selbst loeschte
+# purge_installation sie mit. Aelter als eine Stunde oder unlesbar gilt sie
+# nicht; ohne lesbare Uhr faellt die Pruefung geschlossen aus (Regeln/01).
+#
+# LBPDATA kommt aus /etc/environment. Fehlt es, wird der Ort ausgerechnet:
+# ein leeres LBPDATA ergaebe sonst /<name>.upgrade_laeuft, und die Pruefung
+# fiele still offen aus. bin/wolf_server fragt dasselbe noch einmal; hier
+# steht es zusaetzlich, damit der Grund im Systemlogger nachzulesen ist.
+markendir=${LBPDATA:-$LBHOMEDIR/data/plugins}
+marke=$markendir/$pluginname.upgrade_laeuft
+if [ -f "$marke" ]; then
+    seit=$(cat "$marke" 2>/dev/null)
+    case "$seit" in
+        ''|*[!0-9]*) seit="" ;;
+    esac
+    if [ -n "$seit" ]; then
+        jetzt=$(date +%s 2>/dev/null)
+        case "$jetzt" in
+            ''|*[!0-9]*) jetzt="" ;;
+        esac
+        if [ -z "$jetzt" ]; then
+            if [ -x /usr/bin/logger ]; then
+                /usr/bin/logger "loxberry-plugin-$pluginname - Start uebersprungen: Aktualisierung laeuft (Uhrzeit nicht lesbar)"
+            fi
+            exit 0
+        fi
+        alter=$(( jetzt - seit ))
+        if [ "$alter" -ge 0 ] && [ "$alter" -lt 3600 ]; then
+            if [ -x /usr/bin/logger ]; then
+                /usr/bin/logger "loxberry-plugin-$pluginname - Start uebersprungen: eine Aktualisierung dieses Plugins laeuft"
+            fi
+            exit 0
+        fi
+    fi
+fi
+
 enabled=$(awk '/^enable[ \t]/{print $2}' $LBPCONFIG/$pluginname/wolf_ism8i.conf 2>/dev/null)
 enabled=${enabled:-0}
 

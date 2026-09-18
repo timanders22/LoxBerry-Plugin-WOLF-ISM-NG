@@ -23,6 +23,70 @@ Die Kette: **Dr. Mugur Dietrich** (Auswertungsmodul, 2017) → **Dominik
 Holland** ([Gagi2k/LoxBerry-Plugin-WolfIsm8](https://github.com/Gagi2k/LoxBerry-Plugin-WolfIsm8),
 Einbettung als LoxBerry-Plugin) → diese Fortführung.
 
+## Version 3.1.3 — kein zweiter Dienst, und eine Marke für die Aktualisierung
+
+Drei Dinge, alle in WSL Ubuntu gemessen (Prüfstand
+`Pruefung-WOLF-ISM-NG-3.1.3`, 18.09.2026, 28 Fälle). **An einem ISM8 ist
+nichts davon nachgemessen** — es gibt in diesem Haus kein Gerät.
+
+### 1. `wolf_server start` legte einen zweiten Dienst an
+
+Der Zweig `start` startete den Watchdog in der ersten Zeile und sah erst
+*danach* nach, ob er läuft — das war als Wirkungsmessung gedacht, nicht als
+Bedingung. Ein zweiter Aufruf legte deshalb einen zweiten Watchdog an, und
+jeder davon startet ein eigenes Auswertungsmodul auf demselben ISM8-Port.
+Gemessen: **2 Prozesse statt 1** (Fall A1b). Der Weg dorthin führt über
+`daemon/daemon` beim Systemstart — der Wächter aus `cron/cron.05min` fragt
+schon seit langem selbst nach, der Systemstart nicht.
+
+Jetzt fragt `start` zuerst und startet danach. Wer zweimal startet, bekommt
+die Meldung, dass schon einer läuft, und den Rückgabewert 0.
+
+### 2. Eine Marke, solange eine Aktualisierung läuft
+
+Zwischen `preupgrade.sh` und `postupgrade.sh` räumt der Installer
+`config/plugins/<ordner>/` und `data/plugins/<ordner>/` weg und legt die
+Cron-Datei neu an. Was in dieser Lücke startet, startet mit den
+mitgelieferten Vorgabewerten.
+
+`preupgrade.sh` legt deshalb als Erstes die Datei
+`data/plugins/<ordner>.upgrade_laeuft` mit der Unixzeit an — **neben** den
+Datenordner, weil der Ordner selbst gelöscht wird. Jeder Startweg achtet sie,
+solange sie jünger als eine Stunde ist: `bin/wolf_server`, `cron/cron.05min`
+und `daemon/daemon`. Ist sie älter oder unlesbar, gilt sie nicht — eine
+abgebrochene Installation darf das Plugin nicht für immer stilllegen. Ist die
+Uhr nicht lesbar, gilt sie: ein Schutz fällt geschlossen aus.
+
+`postupgrade.sh` — das letzte Hakenskript dieser Linie — startet den Dienst
+mit der Ausnahme `WI_START_TROTZ_MARKE=1` und entfernt die Marke **danach**.
+Die umgekehrte Reihenfolge ist gemessen falsch: zwischen dem Entfernen und
+dem Augenblick, in dem der neue Dienst dasteht, sieht ein Wächterlauf weder
+die Marke noch einen laufenden Dienst und startet einen eigenen (Fall C9).
+`uninstall` räumt die Marke weg.
+
+**Das ist keine Vorsorge, sondern ein gemessener Schaden.** Mit 120
+Wächterläufen im Abstand von 0,02 Sekunden während der Hakenskripte standen
+ohne die Marke am Ende **zwei** Watchdogs da (Fall C8). Am Gerät liegen fünf
+Minuten zwischen zwei Wächterläufen — das Fenster ist also selten getroffen,
+aber „selten" ist keine Bauweise.
+
+### 3. Die Oberfläche hält an, solange die Marke gilt
+
+Auch das ist gemessen, nicht vorsorglich. In der Lücke bot die Seite den
+ISM8-Port **12004** an, eingestellt war **12777** (Fall B4); ein Speichern in
+dieser Zeit meldete Erfolg und war hinterher fort, weil `postupgrade.sh` die
+gesicherte Datei darüberlegt (Fall B5); und der Knopf *Dienst neu starten* im
+Reiter Test startete den Dienst mitten in der Aktualisierung (Fall B3).
+
+Solange die Marke gilt, zeigt die Seite deshalb nur einen Hinweis. Der Reiter
+Test hat dazu eine neue Prüfzeile: *Läuft gerade eine Aktualisierung dieses
+Plugins?* — mit drei Ausgängen, denn eine liegengebliebene Marke, die nicht
+mehr gilt, ist etwas anderes als gar keine.
+
+Der Knopf *Dienst anhalten* bleibt offen, und `wolf_server stop` ebenso: ein
+Anhalten kann keinen zweiten Dienst erzeugen, und `postupgrade.sh` braucht
+den Weg.
+
 ## Version 3.1.0 — SG-Ready und § 14a EnWG
 
 Ein neuer Reiter **SG-Ready** zwischen *MQTT* und *Einbindung in Loxone*. Er

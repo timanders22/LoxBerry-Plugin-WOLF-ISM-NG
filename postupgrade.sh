@@ -46,14 +46,43 @@ case "$SICHERUNG" in
     /tmp/*) rm -rf "$SICHERUNG" ;;
 esac
 
+# Die Marke aus preupgrade.sh. Dieses Skript ist das LETZTE Hakenskript
+# dieser Linie: preroot, preupgrade, postinstall, postupgrade - ein
+# postroot.sh gibt es hier nicht.
+WI_BASE="${5:-$LBHOMEDIR}"
+WI_MARKE="$WI_BASE/data/plugins/$PDIR.upgrade_laeuft"
+
 enabled=$(awk '/^enable[ \t]/{print $2}' $PCONFIG/wolf_ism8i.conf 2>/dev/null)
 enabled=${enabled:-0}
 
 if [ "$enabled" -eq "1" ]; then
     # Enable
     echo "<INFO> Restarting server"
-    $PBIN/wolf_server restart > /dev/null 2>&1
+    # WI_START_TROTZ_MARKE=1: bin/wolf_server startet seit 3.1.3 nicht,
+    # solange die Marke gilt. Hier ist sie die eigene, und dieser Start ist
+    # der letzte Schritt der Installation. Ohne die Ausnahme bliebe der
+    # Dienst bis zum naechsten Waechterlauf aus - bis zu fuenf Minuten.
+    WI_START_TROTZ_MARKE=1 $PBIN/wolf_server restart > /dev/null 2>&1
 fi
+
+# Die Marke erst NACH dem Start entfernen.
+#
+# Die umgekehrte Reihenfolge waere moeglich - seit 3.1.3 fragt auch
+# bin/wolf_server nach der Marke -, sie ist aber falsch, und das ist
+# gemessen: zwischen dem Entfernen und dem Augenblick, in dem der neue
+# Dienst dasteht, sieht ein Waechterlauf weder die Marke noch einen
+# laufenden Dienst und startet einen eigenen. In WSL nachgestellt am
+# 18.09.2026, 120 Waechterlaeufe im Abstand von 0,02 s waehrend der
+# Hakenskripte: diese Reihenfolge ein Dienst, umgekehrt (Fall C9) mehr als
+# einer.
+#
+# Kein trap EXIT: diese Datei ist ein sh-Skript ohne vorzeitigen Ausstieg,
+# und ein EXIT-Trap wird in dash auch von einer Unterschale ausgeloest - die
+# Marke fiele dann schon bei der Kommandoersetzung darueber.
+#
+# Entfernt wird immer, auch wenn der Start unterblieb: sonst sperrte die
+# Marke den Waechter eine Stunde lang.
+rm -f "$WI_MARKE"
 
 # Exit with Status 0
 exit 0
