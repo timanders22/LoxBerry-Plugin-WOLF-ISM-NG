@@ -86,11 +86,12 @@ function wi_klein($s)
 /* Den LoxBerry-Wurzelordner ohne festen Systempfad bestimmen.
  *
  * Vom eigenen Ablageort aufwaerts, bis ein Verzeichnis gefunden ist, das
- * config/plugins UND webfrontend enthaelt. Das trifft die uebliche
- * Installation genauso wie eine an einem anderen Ort - und es trifft auch
- * den Fall, dass das Plugin noch als entpacktes Archiv daliegt (dann findet
- * es nichts und gibt einen Leerstring zurueck, was der Aufrufer ohnehin
- * abfangen muss).
+ * config/plugins, data/plugins UND config/system/general.json enthaelt
+ * (Regeln/06: eine Suche ohne general.json trifft auf einem Arbeitsrechner
+ * das Laufwerk selbst). Bis 3.1.4 genuegten config/plugins und webfrontend -
+ * in einem fremden Baum ohne general.json wurde der zur Wurzel (Fall P4,
+ * Pruefung-WOLF-ISM-NG-3.1.4). Nichts gefunden: Leerstring, den der
+ * Aufrufer abfangen muss; einen Rueckfall danach gibt es nicht.
  *
  * Der Name traegt kein Plugin-Kuerzel und ist deshalb abgesichert: zwei
  * Bibliotheken landen nie im selben Prozess, aber die Pruefung kostet nichts.
@@ -100,7 +101,8 @@ if (!function_exists('lb_wurzel_ermitteln')) {
     {
         $d = __DIR__;
         for ($i = 0; $i < 8; $i++) {
-            if (is_dir($d . '/config/plugins') && is_dir($d . '/webfrontend')) {
+            if (is_dir($d . '/config/plugins') && is_dir($d . '/data/plugins')
+                && is_file($d . '/config/system/general.json')) {
                 return $d;
             }
             $eltern = dirname($d);
@@ -129,8 +131,10 @@ function wi_t($schluessel)
     static $texte = null;
     if ($texte === null) {
         $p = wi_paths();
-        $pfad = $p['home'] . '/templates/plugins/' . $p['plugin'] . '/lang';
-        if (!is_dir($pfad)) {
+        /* Ohne Wurzel NICHT '' . '/templates/...' - das waere ein Pfad ab
+         * der Laufwerkswurzel (Muster 2 der Nachlese, Fall P5). */
+        $pfad = $p['home'] !== '' ? $p['home'] . '/templates/plugins/' . $p['plugin'] . '/lang' : '';
+        if ($pfad === '' || !is_dir($pfad)) {
             $pfad = dirname(dirname(dirname(__FILE__))) . '/templates/lang';
         }
         $texte = @parse_ini_file($pfad . '/language_' . wi_sprache() . '.ini', true, INI_SCANNER_RAW);
@@ -160,8 +164,10 @@ function wi_paths()
     if ($p !== null) {
         return $p;
     }
-    $home = getenv('LBHOMEDIR');
-    if (!$home) {
+    /* Ein gesetztes LBHOMEDIR gilt mit config/plugins und data/plugins
+     * darunter; sonst wird gesucht (mit general.json) - danach nichts mehr. */
+    $home = rtrim((string) getenv('LBHOMEDIR'), '/');
+    if ($home === '' || !is_dir($home . '/config/plugins') || !is_dir($home . '/data/plugins')) {
         $home = lb_wurzel_ermitteln();
     }
     /* LBPPLUGINDIR ist die Auskunft von LoxBerry selbst und hat Vorrang.
@@ -179,16 +185,38 @@ function wi_paths()
     if (!$dir) {
         $dir = basename(__DIR__);
     }
+    $dir = basename(rtrim((string) $dir, '/'));
     if ($dir === '' || $dir === '.' || $dir === '/' || $dir === 'htmlauth' || $dir === 'plugins') {
         $dir = 'wolf_ng';
     }
-    if ($home) {
+    /* Archivmodus (Muster 3 der Nachlese, Bauart tb_paths() Spotpreis-Tibber
+     * 0.9.19): die Anlage gilt nur, wenn diese Datei dort installiert liegt
+     * (<Wurzel>/webfrontend/htmlauth/plugins/<ordner>, physisch verglichen)
+     * oder der Aufrufer Wurzel UND Ordner ausdruecklich nennt (LBHOMEDIR und
+     * LBPPLUGINDIR). Bis 3.1.4 nahm ein ausgepacktes Archiv unter einer
+     * echten Wurzel - am Geraet steht LBHOMEDIR in /etc/environment - deren
+     * Konfiguration, Dienst und Broker (Fall P1). */
+    $archiv = '';
+    if ($home !== '') {
+        $soll = @realpath($home . '/webfrontend/htmlauth/plugins/' . basename(__DIR__));
+        $ist = @realpath(__DIR__);
+        $installiert = ($soll !== false && $ist !== false && $soll === $ist);
+        $lbp = basename(rtrim((string) getenv('LBPPLUGINDIR'), '/'));
+        $ausdruecklich = ($lbp !== '' && $lbp === $dir
+                          && $home === rtrim((string) getenv('LBHOMEDIR'), '/'));
+        if (!$installiert && !$ausdruecklich) {
+            $archiv = $home;
+            $home = '';
+        }
+    }
+    if ($home !== '') {
         $p = array(
             'home'   => $home,
             'plugin' => $dir,
             'config' => $home . '/config/plugins/' . $dir . '/wolf_ism8i.conf',
             'bindir' => $home . '/bin/plugins/' . $dir,
             'logdir' => $home . '/log/plugins/' . $dir,
+            'archiv' => '',
         );
     } else {
         $base = dirname(dirname(__DIR__));
@@ -198,6 +226,8 @@ function wi_paths()
             'config' => $base . '/config/wolf_ism8i.conf',
             'bindir' => $base . '/bin',
             'logdir' => sys_get_temp_dir(),
+            // Die gefundene Wurzel, wenn diese Datei nicht darin liegt.
+            'archiv' => $archiv,
         );
     }
     return $p;
@@ -1253,7 +1283,7 @@ function wi_localip()
 function wi_miniservers()
 {
     $out = array();
-    $f = wi_paths()['home'] . '/config/system/general.json';
+    $f = wi_general_json();
     if (!is_file($f)) {
         return $out;
     }
@@ -1274,7 +1304,7 @@ function wi_miniservers()
 /** UDP-Eingangsport des MQTT-Gateways (Relay-Weg). Beide Schreibweisen pruefen. */
 function wi_mqtt_udpinport()
 {
-    $f = wi_paths()['home'] . '/config/system/general.json';
+    $f = wi_general_json();
     if (!is_file($f)) {
         return 0;
     }
@@ -1303,7 +1333,7 @@ function wi_mqtt_udpinport()
  */
 function wi_gateway_info()
 {
-    $f = wi_paths()['home'] . '/config/system/general.json';
+    $f = wi_general_json();
     if (!is_file($f)) {
         return null;
     }
@@ -1321,7 +1351,7 @@ function wi_gateway_info()
 /** Adresse des MQTT-Brokers, nur zur Anzeige, ohne Kennwort. */
 function wi_mqtt_broker()
 {
-    $f = wi_paths()['home'] . '/config/system/general.json';
+    $f = wi_general_json();
     if (!is_file($f)) {
         return '';
     }
@@ -1343,33 +1373,299 @@ function wi_mqtt_broker()
 }
 
 /**
- * Gehoert die PID diesem Skript?
+ * Pfad der general.json - oder '' ohne Wurzel.
  *
- * /proc/<pid>/cmdline trennt die Argumente mit Nullbytes. Ein Treffer liegt
- * vor, wenn
- *   - das erste Argument der volle Skriptpfad ist (Start ueber den Shebang),
- *     oder
- *   - das erste Argument ein Interpreter ist UND der volle Pfad unter den
- *     Argumenten steht. Der Watchdog startet das Auswertungsmodul naemlich
- *     als "perl -X <pfad>", der Pfad steht dort erst an dritter Stelle.
- *
- * Die Einschraenkung auf Interpreter ist wichtig: sonst waere auch ein
- * "tail -f <pfad>" oder ein Editor mit offener Datei ein Treffer.
+ * Bis 3.1.4 stand an vier Stellen wi_paths()['home'] . '/config/system/...';
+ * ohne Wurzel war das /config/system/general.json, ein Pfad ab der
+ * Laufwerkswurzel (Muster 2 der Nachlese, Fall P5).
  */
+function wi_general_json()
+{
+    $h = wi_paths()['home'];
+    return $h !== '' ? $h . '/config/system/general.json' : '';
+}
+
+/* ==================================================================
+ * Rueckfrage beim Broker und Abraeumen am Broker (seit 3.1.4)
+ *
+ * MQTT 3.1.1 von Hand, ohne fremde Bibliothek: CONNECT, PUBLISH (QoS 0),
+ * SUBSCRIBE (QoS 0), DISCONNECT. Bauart bw_mqtt_behalten_liste()
+ * (Beschattungswaechter 0.9.21). Die Anmeldung nimmt Brokeruser/Brokerpass
+ * aus der general.json (Regeln/07, Abschnitt 2); das Kennwort steht nur im
+ * CONNECT-Paket, nie in einem Protokoll oder auf einer Kommandozeile.
+ * ================================================================== */
+
+/** Zugang zum Broker aus der general.json, oder null. */
+function wi_mqtt_zugang()
+{
+    $f = wi_general_json();
+    if ($f === '' || !is_file($f)) {
+        return null;
+    }
+    $d = @json_decode((string) @file_get_contents($f), true);
+    if (!is_array($d) || !isset($d['Mqtt']) || !is_array($d['Mqtt'])) {
+        return null;
+    }
+    $m = $d['Mqtt'];
+    $hol = function ($k) use ($m) {
+        return (isset($m[$k]) && is_scalar($m[$k])) ? (string) $m[$k] : '';
+    };
+    $host = trim($hol('Brokerhost'));
+    if ($host === '' || $host === 'localhost') {
+        $host = '127.0.0.1';
+    }
+    $port = (int) $hol('Brokerport');
+    if ($port <= 0 || $port > 65535) {
+        $port = 1883;
+    }
+    return array('host' => $host, 'port' => $port,
+                 'user' => $hol('Brokeruser'), 'pass' => $hol('Brokerpass'));
+}
+
+/**
+ * Eine Sitzung beim Broker: erst $senden (je array(thema, nutzlast, retain)),
+ * DANACH die Filter $filter abonnieren und einsammeln, was der Broker als
+ * zurueckbehalten liefert. Weil beides in derselben Verbindung nacheinander
+ * geschieht, liest das Abonnement den Stand NACH dem Senden - das ist das
+ * Nachlesen.
+ *
+ * Rueckgabe array('lage' => 'ok'|'unbekannt', 'belegt' => array(thema => wert)).
+ * 'ok' nur mit CONNACK 0 UND jeder SUBACK-Rueckgabe unter 0x80 (Muster 11
+ * der Nachlese): ein Broker, der das Lesen verweigert, schickt danach
+ * nichts, und ungeprueft hiesse das "nichts belegt". Belegt ist ein Thema
+ * nur am EMPFANGENEN Paket mit Retain-Merkmal und nicht leerer Nutzlast.
+ */
+function wi_mqtt_sitzung(array $filter, array $senden = array())
+{
+    $aus = array('lage' => 'unbekannt', 'belegt' => array());
+    $z = wi_mqtt_zugang();
+    if ($z === null || !$filter) {
+        return $aus;
+    }
+    $errno = 0;
+    $errstr = '';
+    $s = @stream_socket_client('tcp://' . $z['host'] . ':' . $z['port'], $errno, $errstr, 2);
+    if (!$s) {
+        return $aus;
+    }
+    stream_set_timeout($s, 1);
+    $zk = function ($t) { return pack('n', strlen($t)) . $t; };
+    $laenge = function ($n) {
+        $o = '';
+        do {
+            $b = $n % 128;
+            $n = intdiv($n, 128);
+            if ($n > 0) { $b |= 128; }
+            $o .= chr($b);
+        } while ($n > 0);
+        return $o;
+    };
+    $lies = function ($n) use ($s) {
+        $d = '';
+        while (strlen($d) < $n) {
+            $t = @fread($s, $n - strlen($d));
+            if ($t === false || $t === '') {
+                $meta = stream_get_meta_data($s);
+                if (!empty($meta['timed_out']) || !empty($meta['eof']) || feof($s)) { return null; }
+                continue;
+            }
+            $d .= $t;
+        }
+        return $d;
+    };
+    $paket = function () use ($lies) {
+        $k = $lies(1);
+        if ($k === null) { return null; }
+        $n = 0;
+        $mult = 1;
+        for ($i = 0; $i < 4; $i++) {
+            $b = $lies(1);
+            if ($b === null) { return null; }
+            $n += (ord($b) & 127) * $mult;
+            $mult *= 128;
+            if (!(ord($b) & 128)) { break; }
+        }
+        $r = ($n > 0) ? $lies($n) : '';
+        return ($r === null) ? null : array(ord($k), $r);
+    };
+
+    $flags = 0x02;                                   // saubere Sitzung
+    $nutz = $zk('wolf-leeren-' . getmypid());
+    if ($z['user'] !== '') {
+        $flags |= 0x80;
+        if ($z['pass'] !== '') { $flags |= 0x40; }
+    }
+    $kopf = $zk('MQTT') . chr(4) . chr($flags) . pack('n', 10);
+    if ($z['user'] !== '') {
+        $nutz .= $zk($z['user']);
+        if ($z['pass'] !== '') { $nutz .= $zk($z['pass']); }
+    }
+    if (@fwrite($s, chr(0x10) . $laenge(strlen($kopf . $nutz)) . $kopf . $nutz) !== false) {
+        $ack = $paket();
+        if ($ack !== null && ($ack[0] >> 4) === 2 && strlen($ack[1]) >= 2 && ord($ack[1][1]) === 0) {
+            foreach ($senden as $p) {
+                $rumpf = $zk((string) $p[0]) . (string) $p[1];
+                @fwrite($s, chr(0x30 | (!empty($p[2]) ? 1 : 0)) . $laenge(strlen($rumpf)) . $rumpf);
+            }
+            $sub = pack('n', 1);
+            foreach ($filter as $f) { $sub .= $zk((string) $f) . chr(0); }
+            @fwrite($s, chr(0x82) . $laenge(strlen($sub)) . $sub);
+            $bestaetigt = false;
+            $abgelehnt = false;
+            $ende = microtime(true) + 3.0;
+            while (microtime(true) < $ende) {
+                $pk = $paket();
+                if ($pk === null) { break; }
+                $art = $pk[0] >> 4;
+                if ($art === 9) {
+                    $rc = (string) substr($pk[1], 2);
+                    if (strlen($rc) !== count($filter)) { $abgelehnt = true; }
+                    for ($i = 0; $i < strlen($rc); $i++) {
+                        if (ord($rc[$i]) >= 0x80) { $abgelehnt = true; }
+                    }
+                    if ($abgelehnt) { break; }
+                    $bestaetigt = true;
+                    // Zurueckbehaltenes kommt unmittelbar nach dem SUBACK.
+                    $ende = min($ende, microtime(true) + 1.0);
+                } elseif ($art === 3 && strlen($pk[1]) >= 2) {
+                    $tl = unpack('n', substr($pk[1], 0, 2));
+                    $t = substr($pk[1], 2, $tl[1]);
+                    $versatz = 2 + $tl[1] + ((($pk[0] >> 1) & 3) > 0 ? 2 : 0);
+                    $wert = (string) substr($pk[1], $versatz);
+                    if (($pk[0] & 1) && $wert !== '') {
+                        $aus['belegt'][$t] = $wert;
+                    }
+                }
+            }
+            if ($bestaetigt && !$abgelehnt) {
+                $aus['lage'] = 'ok';
+            } else {
+                $aus['belegt'] = array();
+            }
+        }
+        @fwrite($s, chr(0xE0) . chr(0));
+    }
+    fclose($s);
+    return $aus;
+}
+
+/** Die Themen des SG-Moduls (ohne Praefix). Seit 3.1.4 alle fluechtig. */
+function wi_sg_mqtt_themen()
+{
+    return array('sg/lage', 'sg/laden', 'sg/dimmen', 'sg/fenster',
+                 'sg/naechster_start', 'sg/naechster_preis', 'sg/ts');
+}
+
+/**
+ * Alle zurueckbehaltenen Themen der Linie leeren - fuer uninstall/uninstall
+ * (bin/wolf_sg.php --mqtt-leeren). Schreibt kein Protokoll, legt nichts an.
+ *
+ * Geleert wird nur, was die Linie je gesendet haben kann: online, zeitstempel,
+ * zaehler, jeder Datenpunkt aller Firmwarefassungen (wi_alle_themen()) und die
+ * SG-Themen. Ein fremdes Thema unter demselben Praefix bleibt stehen. Gefragt
+ * wird mit EINEM Filter <praefix>/#; geloescht wird am Broker (nicht ueber
+ * das Gateway, dessen UDP-Eingang unter Last verwirft - Regeln/07), und in
+ * derselben Verbindung wird nachgelesen. Hoechstens drei Runden.
+ *
+ * Rueckgabe array(rc, zeilen): rc 0 = vom Broker bestaetigt leer,
+ * 1 = nicht bestaetigt (nicht zu fragen oder steht noch da).
+ */
+function wi_mqtt_leeren($cfg)
+{
+    $pre = wi_cfg($cfg, 'praefix', 'wolf_ng');
+    $bekannt = array();
+    foreach (wi_alle_themen($cfg) as $t) { $bekannt[$t] = true; }
+    foreach (wi_sg_mqtt_themen() as $t) { $bekannt[$pre . '/' . $t] = true; }
+    $filter = array($pre . '/#');
+    $senden = array();
+    $geleert = 0;
+    for ($runde = 1; $runde <= 3; $runde++) {
+        $f = wi_mqtt_sitzung($filter, $senden);
+        if ($f['lage'] !== 'ok') {
+            return array(1, array('<WARNING> MQTT: der Broker liess sich nicht befragen (Brokerhost, '
+                . 'Brokerport, Zugangsdaten in general.json, Verbindung, Anmeldung oder Abonnement '
+                . 'abgelehnt) - unter ' . $pre . '/ kann noch Zurueckbehaltenes stehen. Von Hand: '
+                . 'mosquitto_pub -r -n -t <thema>'));
+        }
+        $rest = array();
+        foreach (array_keys($f['belegt']) as $t) {
+            if (isset($bekannt[$t])) { $rest[] = $t; }
+        }
+        if (!$rest) {
+            return array(0, array('<OK> MQTT: unter ' . $pre . '/ steht kein zurueckbehaltenes Thema '
+                . 'der Linie mehr im Broker (' . $geleert . ' geleert, vom Broker bestaetigt).'));
+        }
+        $senden = array();
+        foreach ($rest as $t) { $senden[] = array($t, '', true); }
+        $geleert += ($runde === 1) ? count($rest) : 0;
+    }
+    return array(1, array('<WARNING> MQTT: nach drei Runden stehen noch ' . count($rest)
+        . ' zurueckbehaltene Themen im Broker, zum Beispiel ' . $rest[0]
+        . '. Von Hand: mosquitto_pub -r -n -t <thema>'));
+}
+
+/**
+ * Gehoert die PID diesem Skript? ARGUMENTWEISE ueber /proc/<pid>/cmdline.
+ *
+ * Ein Treffer hat genau eine dieser Formen, und der Prozess gehoert dem
+ * Dienstbenutzer (loxberry, wo es ihn nicht gibt der eigene):
+ *   <bash|sh|dash|perl> <skript>        Start ueber den Shebang
+ *   perl -X <skript>                    so startet der Watchdog das Modul
+ * <skript> ist zeichengenau der erwartete Pfad (relativ gestartet gegen
+ * /proc/<pid>/cwd aufgeloest, zusaetzlich ueber realpath verglichen). Ein
+ * weiteres Argument ist ein Einmallauf, kein Dienst.
+ *
+ * Bis 3.1.4 genuegte "Interpreter vorn und der Pfad IRGENDWO unter den
+ * Argumenten": ein "perl -e '...' <modulpfad>" galt als Dienst, der Reiter
+ * Test meldete ihn als laufend, und stop beendete ihn (Faelle W4, W5,
+ * Pruefung-WOLF-ISM-NG-3.1.4). Bauart wie tb_ist_dienst() (Spotpreis-Tibber
+ * 0.9.19) und ist_dienst() in bin/wolf_server.
+ */
+function wi_dienst_uid()
+{
+    if (function_exists('posix_getpwnam')) {
+        $pw = @posix_getpwnam('loxberry');
+        if (is_array($pw) && isset($pw['uid'])) {
+            return (int) $pw['uid'];
+        }
+    }
+    return function_exists('posix_geteuid') ? (int) posix_geteuid() : (int) getmyuid();
+}
+
 function wi_ist_prozess($pid, $skript)
 {
-    $roh = @file_get_contents('/proc/' . (int) $pid . '/cmdline');
+    $pid = (int) $pid;
+    $roh = @file_get_contents('/proc/' . $pid . '/cmdline');
     if ($roh === false || $roh === '') {
         return false;
     }
-    $args = explode("\0", $roh);
-    if (isset($args[0]) && $args[0] === $skript) {
+    if (@fileowner('/proc/' . $pid) !== wi_dienst_uid()) {
+        return false;
+    }
+    $args = explode("\0", rtrim($roh, "\0"));
+    $interp = basename($args[0]);
+    $pfad = null;
+    if (count($args) === 2 && in_array($interp, array('bash', 'sh', 'dash', 'perl'), true)) {
+        $pfad = $args[1];
+    } elseif (count($args) === 3 && $interp === 'perl' && $args[1] === '-X') {
+        $pfad = $args[2];
+    }
+    if ($pfad === null || $pfad === '') {
+        return false;
+    }
+    if ($pfad[0] !== '/') {
+        $wd = @readlink('/proc/' . $pid . '/cwd');
+        if ($wd === false) {
+            return false;
+        }
+        $pfad = preg_replace('/ \(deleted\)$/', '', $wd) . '/' . $pfad;
+    }
+    if ($pfad === $skript) {
         return true;
     }
-    $interpreter = array('perl', 'bash', 'sh', 'dash');
-    return isset($args[0])
-        && in_array(basename($args[0]), $interpreter, true)
-        && in_array($skript, $args, true);
+    $a = @realpath($pfad);
+    $b = @realpath($skript);
+    return $a !== false && $b !== false && $a === $b;
 }
 
 /** Erste PID, die zu diesem Skript gehoert - 0 wenn keine. */
@@ -1464,6 +1760,11 @@ function wi_server($aktion)
 {
     if (!in_array($aktion, array('start', 'stop', 'restart', 'status'), true)) {
         return '';
+    }
+    /* Aus einem ausgepackten Archiv wird nichts gestartet oder angehalten
+     * (Muster 3 der Nachlese, Fall P6): bindir zeigte dann auf das Archiv. */
+    if ($aktion !== 'status' && wi_paths()['home'] === '') {
+        return wi_t('UPGRADE.ARCHIV');
     }
     $skript = wi_paths()['bindir'] . '/wolf_server';
     if (!is_file($skript)) {

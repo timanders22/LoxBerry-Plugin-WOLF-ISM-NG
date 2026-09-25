@@ -16,19 +16,49 @@ if [ -x /usr/bin/logger ]; then
     /usr/bin/logger "loxberry-plugin-$pluginname - DAEMON Script from Wolf ISM8 Plugin"
 fi
 
+melde() {
+    if [ -x /usr/bin/logger ]; then
+        /usr/bin/logger "loxberry-plugin-$pluginname - $1"
+    fi
+}
+
+# Die Wurzel: LBHOMEDIR, wenn es config/plugins und data/plugins traegt,
+# sonst vom eigenen Ablageort (<wurzel>/system/daemons/plugins/<name>)
+# aufwaerts bis zu einem Verzeichnis mit config/plugins, data/plugins UND
+# config/system/general.json - danach nichts mehr (Regeln/06, Muster 1 und 2
+# der Nachlese). Bis 3.1.4 stand hier "$LBHOMEDIR/bin/plugins/..." ohne
+# Pruefung: bei leerem LBHOMEDIR ein Pfad ab der Laufwerkswurzel, und der
+# Dienst startete nie (Fall W12, Pruefung-WOLF-ISM-NG-3.1.4).
+wurzel=""
+if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+   && [ -d "$LBHOMEDIR/data/plugins" ]; then
+    wurzel="$LBHOMEDIR"
+else
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd -P)
+    i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ] \
+           && [ -f "$v/config/system/general.json" ]; then
+            wurzel="$v"
+            break
+        fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+fi
+if [ -z "$wurzel" ]; then
+    melde "Start uebersprungen: kein LoxBerry-Wurzelverzeichnis gefunden"
+    exit 0
+fi
+
 # Laeuft gerade eine Aktualisierung dieses Plugins? Diese Datei laeuft beim
 # Systemstart; faellt ein Neustart mitten in eine Aktualisierung, ist die
 # Konfiguration weggeraeumt, und der Dienst liefe mit der Vorgabe. Die Marke
 # legt preupgrade.sh NEBEN den Datenordner - im Ordner selbst loeschte
-# purge_installation sie mit. Aelter als eine Stunde oder unlesbar gilt sie
-# nicht; ohne lesbare Uhr faellt die Pruefung geschlossen aus (Regeln/01).
-#
-# LBPDATA kommt aus /etc/environment. Fehlt es, wird der Ort ausgerechnet:
-# ein leeres LBPDATA ergaebe sonst /<name>.upgrade_laeuft, und die Pruefung
-# fiele still offen aus. bin/wolf_server fragt dasselbe noch einmal; hier
-# steht es zusaetzlich, damit der Grund im Systemlogger nachzulesen ist.
-markendir=${LBPDATA:-$LBHOMEDIR/data/plugins}
-marke=$markendir/$pluginname.upgrade_laeuft
+# purge_installation sie mit. Aelter als eine Stunde, mehr als 300 s aus der
+# Zukunft oder unlesbar gilt sie nicht; ohne lesbare Uhr faellt die Pruefung
+# geschlossen aus (Regeln/01). bin/wolf_server fragt dasselbe noch einmal;
+# hier steht es zusaetzlich, damit der Grund im Systemlogger nachzulesen ist.
+marke="$wurzel/data/plugins/$pluginname.upgrade_laeuft"
 if [ -f "$marke" ]; then
     seit=$(cat "$marke" 2>/dev/null)
     case "$seit" in
@@ -40,30 +70,25 @@ if [ -f "$marke" ]; then
             ''|*[!0-9]*) jetzt="" ;;
         esac
         if [ -z "$jetzt" ]; then
-            if [ -x /usr/bin/logger ]; then
-                /usr/bin/logger "loxberry-plugin-$pluginname - Start uebersprungen: Aktualisierung laeuft (Uhrzeit nicht lesbar)"
-            fi
+            melde "Start uebersprungen: Aktualisierung laeuft (Uhrzeit nicht lesbar)"
             exit 0
         fi
         alter=$(( jetzt - seit ))
-        if [ "$alter" -ge 0 ] && [ "$alter" -lt 3600 ]; then
-            if [ -x /usr/bin/logger ]; then
-                /usr/bin/logger "loxberry-plugin-$pluginname - Start uebersprungen: eine Aktualisierung dieses Plugins laeuft"
-            fi
+        # -300: Muster 8 der Nachlese (Fall W10).
+        if [ "$alter" -ge -300 ] && [ "$alter" -lt 3600 ]; then
+            melde "Start uebersprungen: eine Aktualisierung dieses Plugins laeuft"
             exit 0
         fi
     fi
 fi
 
-enabled=$(awk '/^enable[ \t]/{print $2}' $LBPCONFIG/$pluginname/wolf_ism8i.conf 2>/dev/null)
+enabled=$(awk '/^enable[ \t]/{print $2}' "$wurzel/config/plugins/$pluginname/wolf_ism8i.conf" 2>/dev/null)
 enabled=${enabled:-0}
 
-if [ "$enabled" -eq 1 ]; then
-    if [ -x /usr/bin/logger ]; then
-            /usr/bin/logger "loxberry-plugin-$pluginname - Starting Wolf ISM8 Server"
-    fi
-    # Enable
-    su loxberry -c "$LBHOMEDIR/bin/plugins/$pluginname/wolf_server start" > /dev/null 2>&1
+if [ "$enabled" = "1" ]; then
+    melde "Starting Wolf ISM8 Server"
+    # Enable. LBHOMEDIR geht mit, damit wolf_server dieselbe Wurzel nimmt.
+    su loxberry -c "$(printf '%q ' env "LBHOMEDIR=$wurzel" "$wurzel/bin/plugins/$pluginname/wolf_server" start)" > /dev/null 2>&1
 fi
 
 # Exit with Status 0

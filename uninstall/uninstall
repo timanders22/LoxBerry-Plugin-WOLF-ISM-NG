@@ -16,78 +16,145 @@
 # Auswertungsmodul bei jedem Absturz neu starten und weiter auf dem
 # ISM8-Port lauschen - obwohl das Plugin gar nicht mehr da ist.
 #
-# ZUR PROZESSSUCHE - bitte nicht auf pkill zurueckbauen:
-# "pkill -f wolf_ism8i.pl" durchsucht die ganze Befehlszeile und traefe
-# auch einen Editor mit offener Datei oder ein zweites Exemplar des
-# Plugins. "ps -C" und "killall" vergleichen den comm-Namen, der bei
-# einem Skript mit Shebang "bash" bzw. "perl" lautet - die finden gar
-# nichts. Der Watchdog startet das Auswertungsmodul ausserdem als
-# "perl -X <pfad>", der Pfad steht dort erst an dritter Stelle.
+# Seit 3.1.4 leert es ausserdem die zurueckbehaltenen MQTT-Themen der Linie
+# (Schritt 2) - vor allem "online", das den Letzten Willen traegt: ohne das
+# Abraeumen stuende die "0" eines entfernten Plugins fuer immer im Broker
+# (Regeln/07, Abschnitt 3, Bedingung c).
 
 PDIR=$3
 [ -n "$PDIR" ] || PDIR="wolf_ng"
 BASE="${5:-$LBHOMEDIR}"
-# Dritter Rueckfall: der eigene Ablageort. Bewusst kein fest verdrahteter
-# Systempfad - LoxBerry laesst sich anderswohin installieren, und der
-# Plugin-Pruefer sucht die Zeichenkette, ohne den Zusammenhang zu sehen.
-# Dieses Skript liegt zur Laufzeit unter
-#     <home>/data/system/uninstall/<pname>
-# - nachgemessen an plugininstall.pl:1170 (Kopie) und :1589 (Aufruf).
-# Von dort sind es DREI Ebenen bis zur Wurzel, nicht vier. Der
-# Kommentar nannte bis 3.0.10 <home>/data/plugins/<ordner>/uninstall/
-# - dort liegt das Skript nie, und die vierte Ebene haette auf das
-# Elternverzeichnis von <home> gezeigt. Der Zweig ist heute tot, weil
-# der Installer $5 immer uebergibt; falsch war er trotzdem.
-if [ -z "$BASE" ] || [ ! -d "$BASE" ]; then
-    BASE=$(cd "$(dirname "$(readlink -f "$0")")/../../.." 2>/dev/null && pwd)
+# Die Wurzel. Was der Installer ($5) oder die Umgebung (LBHOMEDIR) nennt,
+# gilt mit config/plugins und data/plugins darunter; sonst wird vom eigenen
+# Ablageort (<home>/data/system/uninstall/<pname>, plugininstall.pl:1170)
+# AUFWAERTS gesucht, bis config/plugins, data/plugins UND
+# config/system/general.json da sind (Regeln/06) - danach nichts mehr.
+# Bis 3.1.4 wurden hier drei Ebenen hinauf gerechnet und nur config/plugins
+# verlangt: in einem fremden Baum ohne general.json loeschte das Skript die
+# Zweitschrift dort (Fall W14, Pruefung-WOLF-ISM-NG-3.1.4).
+wi_wurzel_suchen() {
+    local v i=0
+    v=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd -P)
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ $i -lt 8 ]; do
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ] \
+           && [ -f "$v/config/system/general.json" ]; then
+            printf '%s\n' "$v"; return 0
+        fi
+        v=$(dirname "$v"); i=$((i + 1))
+    done
+    return 1
+}
+if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ] || [ ! -d "$BASE/data/plugins" ]; then
+    BASE=$(wi_wurzel_suchen)
 fi
-# Und eine Wache davor: sieht es hier nicht wie ein LoxBerry aus,
-# wird nichts geloescht und nichts behauptet.
-if [ -z "$BASE" ] || [ ! -d "$BASE/config/plugins" ]; then
+if [ -z "$BASE" ]; then
     echo "<WARNING> Die LoxBerry-Wurzel liess sich nicht bestimmen."
-    echo "<WARNING> Es wurde nichts entfernt. Von Hand nachsehen:"
+    echo "<WARNING> Es wurde nichts beendet und nichts entfernt. Von Hand nachsehen:"
     echo "<WARNING>   config/plugins/$PDIR.backup.wolf_ism8i.conf"
-    exit 0
+    exit 1
 fi
 
 BINPATH="$BASE/bin/plugins/$PDIR"
 
-wolf_beenden() {
-    SKRIPT="$1"
-    N=0
-    for D in /proc/[0-9]*; do
-        P=$(basename "$D")
-        [ -r "$D/cmdline" ] || continue
-        ARGS=$(tr '\0' '\n' < "$D/cmdline" 2>/dev/null)
-        ERSTES=$(printf '%s\n' "$ARGS" | head -1)
-        TREFFER=0
-        if [ "$ERSTES" = "$SKRIPT" ]; then
-            TREFFER=1
-        else
-            case "$(basename "$ERSTES")" in
-                perl|bash|sh|dash)
-                    printf '%s\n' "$ARGS" | grep -qxF "$SKRIPT" && TREFFER=1 ;;
-            esac
-        fi
-        if [ "$TREFFER" -eq 1 ]; then
-            kill "$P" 2>/dev/null
-            for i in 1 2 3 4 5; do
-                kill -0 "$P" 2>/dev/null || break
-                sleep 1
-            done
-            kill -9 "$P" 2>/dev/null
-            N=$((N+1))
-            echo "<OK> Beendet: $(basename "$SKRIPT") (PID $P)"
-        fi
-    done
-    return 0
+# ---------------------------------------------------------------------------
+# 1. Dienst anhalten - argumentweise (Muster 4 der Nachlese)
+# ---------------------------------------------------------------------------
+# Erkennung und Beenden wie in bin/wolf_server. Bis 3.1.4 genuegte der Pfad
+# IRGENDWO unter den Argumenten, und nach "kill -0" folgte kill -9 ohne neue
+# Pruefung: ein "perl -e '...' <modulpfad>" wurde mit beendet (Fall W15).
+WI_DIENST_UID=$(id -u loxberry 2>/dev/null || id -u)
+wi_ist_dienst() {   # $1 PID  $2 erwarteter Skriptpfad
+    local a0 a1 a2 a3 pfad wd
+    [ -r "/proc/$1/cmdline" ] || return 1
+    [ "$(stat -c %u "/proc/$1" 2>/dev/null)" = "$WI_DIENST_UID" ] || return 1
+    a0=""; a1=""; a2=""; a3=""
+    { IFS= read -r -d "" a0; IFS= read -r -d "" a1; IFS= read -r -d "" a2
+      IFS= read -r -d "" a3; } 2>/dev/null < "/proc/$1/cmdline"
+    pfad=""
+    case "${a0##*/}" in
+        bash|sh|dash|perl)
+            if [ -n "$a1" ] && [ -z "$a2" ]; then
+                pfad="$a1"
+            elif [ "${a0##*/}" = "perl" ] && [ "$a1" = "-X" ] && [ -n "$a2" ] && [ -z "$a3" ]; then
+                pfad="$a2"
+            fi ;;
+    esac
+    [ -n "$pfad" ] || return 1
+    case "$pfad" in
+        /*) ;;
+        *)  wd=$(readlink "/proc/$1/cwd" 2>/dev/null) || return 1
+            pfad="${wd% (deleted)}/$pfad" ;;
+    esac
+    [ "$pfad" = "$2" ] && return 0
+    [ -n "$(readlink -f "$2" 2>/dev/null)" ] || return 1
+    [ "$(readlink -f "$pfad" 2>/dev/null)" = "$(readlink -f "$2" 2>/dev/null)" ]
 }
 
-# Erst den Watchdog, sonst startet er das Auswertungsmodul sofort neu.
-wolf_beenden "$BINPATH/wolf_watchdog.sh"
-sleep 1
-wolf_beenden "$BINPATH/wolf_ism8i.pl"
+N=0
+for S in "$BINPATH/wolf_watchdog.sh" "$BINPATH/wolf_ism8i.pl"; do
+    for D in /proc/[0-9]*; do
+        P="${D#/proc/}"
+        wi_ist_dienst "$P" "$S" || continue
+        kill "$P" 2>/dev/null
+        N=$((N + 1))
+        echo "<OK> Beendet: $(basename "$S") (PID $P)"
+    done
+done
+if [ "$N" -gt 0 ]; then
+    for i in 1 2 3 4 5; do
+        OFFEN=0
+        for S in "$BINPATH/wolf_watchdog.sh" "$BINPATH/wolf_ism8i.pl"; do
+            for D in /proc/[0-9]*; do
+                wi_ist_dienst "${D#/proc/}" "$S" && OFFEN=1
+            done
+        done
+        [ "$OFFEN" -eq 0 ] && break
+        sleep 1
+    done
+    # Vor kill -9 wieder die volle Probe.
+    for S in "$BINPATH/wolf_watchdog.sh" "$BINPATH/wolf_ism8i.pl"; do
+        for D in /proc/[0-9]*; do
+            wi_ist_dienst "${D#/proc/}" "$S" && kill -9 "${D#/proc/}" 2>/dev/null
+        done
+    done
+else
+    echo "<INFO> Es lief kein Wolf-Server."
+fi
 
+# ---------------------------------------------------------------------------
+# 2. Zurueckbehaltene MQTT-Themen leeren (Muster 6 und 7 der Nachlese)
+# ---------------------------------------------------------------------------
+# NACH dem Anhalten - sonst schriebe der Dienst "online" gleich wieder - und
+# vor dem Loeschen der Ordner: Konfiguration (Praefix) und bin/ sind hier
+# noch da. Geleert wird direkt am Broker, und in derselben Verbindung wird
+# nachgelesen (wi_mqtt_leeren() in wi_lib.php, ueber bin/wolf_sg.php).
+# Als loxberry, stdin geschlossen, damit su nie auf eine Eingabe wartet.
+#
+# 'timeout -k 5 60' (Muster 13 der Nachlese, Vorbild Weissware 0.9.34): nach
+# 60 s SIGTERM, nach weiteren 5 s SIGKILL, und ein Abbruch steht als WARNING
+# da - nicht hinter '|| true' versteckt (Fall L7).
+WI_RC=0
+if command -v php >/dev/null 2>&1 && [ -f "$BINPATH/wolf_sg.php" ]; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/bash loxberry -c "$(printf '%q ' env "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PDIR" \
+            timeout -k 5 60 php "$BINPATH/wolf_sg.php" --mqtt-leeren)" < /dev/null 2>&1 || WI_RC=$?
+    else
+        env "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PDIR" timeout -k 5 60 php "$BINPATH/wolf_sg.php" \
+            --mqtt-leeren < /dev/null 2>&1 || WI_RC=$?
+    fi
+    case "$WI_RC" in
+        0|1|2) ;;
+        124) echo "<WARNING> MQTT: das Leeren der zurueckbehaltenen Themen wurde nach 60 s abgebrochen - im Broker kann noch etwas stehen. Von Hand: mosquitto_pub -r -n -t <thema>" ;;
+        137) echo "<WARNING> MQTT: das Leeren der zurueckbehaltenen Themen reagierte nicht auf SIGTERM und wurde hart beendet (SIGKILL) - im Broker kann noch etwas stehen. Von Hand: mosquitto_pub -r -n -t <thema>" ;;
+        *) echo "<WARNING> MQTT: das Leeren der zurueckbehaltenen Themen endete unerwartet (Rueckgabe $WI_RC) - im Broker kann noch etwas stehen." ;;
+    esac
+else
+    echo "<WARNING> PHP oder bin/wolf_sg.php fehlt - zurueckbehaltene MQTT-Themen wurden nicht geleert."
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Marke und Zweitschrift neben den Plugin-Ordnern
+# ---------------------------------------------------------------------------
 # Die Zweitschrift NEBEN dem Konfigurationsordner raeumt der Installer
 # nicht weg - er loescht nur config/plugins/<ordner>/ selbst
 # (plugininstall.pl:1629). Bis 3.0.10 blieb sie liegen, und
@@ -116,7 +183,4 @@ else
 fi
 
 echo "<INFO> Der ISM8-Port ist damit wieder frei."
-echo "<INFO> Im MQTT-Broker koennen Werte stehen bleiben, wenn das Plugin mit"
-echo "<INFO> gesetztem Retain-Merker gesendet hat. Zum Aufraeumen:"
-echo "<INFO> LoxBerry -> System -> MQTT Gateway."
 exit 0

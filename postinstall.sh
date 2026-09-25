@@ -55,23 +55,35 @@ PBIN=$LBPBIN/$PDIR
 #
 # Eine gueltige Konfiguration wird NIE ueberschrieben. Eine Sicherung, die
 # echte Einstellungen ersetzt, waere schlimmer als gar keine.
+#
+# Entschieden wird nach INHALT, nie nach Groesse (Muster 9 der Nachlese):
+# Inhalt heisst eine Zeile "enable 0|1" (wi_hat_inhalt, dieselbe Regel wie in
+# preupgrade.sh). Bis 3.1.4 wurde eine Zweitschrift OHNE Inhalt ueber die
+# Vorgabe gelegt und "wiederhergestellt" gemeldet (Fall W19,
+# Pruefung-WOLF-ISM-NG-3.1.4).
 NETZ_BASE="${5:-$LBHOMEDIR}"
 NETZ_PDIR="${3:-wolf_ng}"
 NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
+wi_hat_inhalt() {
+    [ -f "$1" ] && grep -Eiq '^[[:space:]]*enable[[:space:]]+[01][[:space:]]*$' "$1"
+}
 netz_zurueck() {
     datei=$1; soll=$2
     ziel="$NETZ_CFG/$datei"
     zweit="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.$datei"
     [ -f "$zweit" ] || return 0
     verloren=0
-    if [ ! -f "$ziel" ] || [ ! -s "$ziel" ]; then
+    if ! wi_hat_inhalt "$ziel"; then
         verloren=1
     else
         ist=$(sha256sum "$ziel" 2>/dev/null | cut -d" " -f1)
         [ -n "$ist" ] && [ "$ist" = "$soll" ] && verloren=1
     fi
     if [ "$verloren" = "1" ]; then
-        if cp -p "$zweit" "$ziel" 2>/dev/null; then
+        if ! wi_hat_inhalt "$zweit"; then
+            echo "<WARNING> Die Zweitschrift $zweit traegt keinen Inhalt -"
+            echo "<WARNING> $datei wurde NICHT zurueckgespielt; es gilt die Vorgabe."
+        elif cp -p "$zweit" "$ziel" 2>/dev/null && cmp -s "$zweit" "$ziel"; then
             echo "<OK> $datei aus der Zweitschrift wiederhergestellt."
         else
             echo "<WARNING> $datei liess sich nicht zurueckspielen. Die Sicherung"
@@ -79,6 +91,11 @@ netz_zurueck() {
         fi
     fi
 }
+if [ -z "$NETZ_BASE" ] || [ ! -d "$NETZ_BASE/config/plugins" ]; then
+    echo "<WARNING> Die LoxBerry-Wurzel ('$NETZ_BASE') traegt kein config/plugins -"
+    echo "<WARNING> die Zweitschrift wurde nicht geprueft."
+    exit 1
+fi
 # Die Pruefsumme der mitgelieferten Vorgabe wird GERECHNET, nicht
 # eingetragen. Bis 3.0.10 stand sie als Zeichenkette hier; wer
 # config/wolf_ism8i.conf um ein Zeichen aendert, ohne diese Zeile

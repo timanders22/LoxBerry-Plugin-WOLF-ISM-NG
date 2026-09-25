@@ -23,6 +23,103 @@ Die Kette: **Dr. Mugur Dietrich** (Auswertungsmodul, 2017) → **Dominik
 Holland** ([Gagi2k/LoxBerry-Plugin-WolfIsm8](https://github.com/Gagi2k/LoxBerry-Plugin-WolfIsm8),
 Einbettung als LoxBerry-Plugin) → diese Fortführung.
 
+## Version 3.1.4 — `online` nach jeder Neuverbindung, Deinstallation räumt den Broker ab
+
+Alles in WSL Ubuntu gemessen (Prüfstand `Pruefung-WOLF-ISM-NG-3.1.4`,
+25.09.2026, 58 Fälle) — gegen einen nachgebauten Broker und eine Attrappe von
+`Net::MQTT::Simple`. **An einem ISM8 und am echten Broker ist nichts davon
+nachgemessen.**
+
+### `online` steht nach einem Abriss wieder richtig im Broker
+
+`<präfix>/online` heißt weiter „das ISM8 ist verbunden“ (1) oder nicht (0).
+Der Broker setzt es über den Letzten Willen selbst auf 0, wenn die Verbindung
+des Dienstes abreißt. Bis 3.1.3 sagte der Dienst den Stand aber erst beim
+nächsten ISM8-Wechsel wieder an. Nach einem Abriss mit Neuverbindung stand
+deshalb „0“ im Broker, obwohl Dienst und ISM8 liefen, und das blieb so, bis
+das ISM8 die Verbindung wechselte. Dasselbe galt nach einer Präfix-Änderung.
+
+Jetzt geht der aktuelle Stand bei **jedem** Verbinden retained hinaus: beim
+Start, nach einer Neuverbindung und nach einer Präfix-Änderung. Ohne ISM8 ist
+das 0, nicht 1. Unter dem alten Präfix wird `online` geleert.
+
+**Neuverbindung, geklärt:** Die Bibliothek am Gerät
+(`libs/perllib/Net/MQTT/Simple.pm`, 1.32-3LB, am 25.09.2026 gelesen) verbindet
+nach einem Abriss selbst neu und schickt den Letzten Willen jedes Mal mit
+(`_connect` → `_send_connect`). Dem Aufrufer meldet sie die Neuverbindung
+nicht. Der Dienst erkennt sie deshalb selbst am neuen Socket
+(`$mqtt->{socket}`, `last_connect`). Eine unveränderte 1.32-3LB erneuert nach
+einer Neuverbindung die Abos **nicht** (Regeln/07: Juerd/Net-MQTT-Simple#27,
+mschlenstedt/Loxberry#1571). Schaltbefehle aus Loxone über MQTT kommen dann bis
+zum nächsten Dienststart nicht an. Das Gerät in diesem Haus trägt seit
+17.09.2026 eine berichtigte Zeile; auf anderen Anlagen gilt die Lücke weiter.
+Ein Neustart des Dienstes heilt sie, bis zum nächsten Abriss.
+
+### Die Deinstallation räumt den Broker ab
+
+Bis 3.1.3 blieben alle zurückbehaltenen Themen nach der Deinstallation im
+Broker stehen, auch die „0“ von `online`. Nach jedem Neustart von Broker oder
+Gateway bekam der Miniserver sie wieder.
+
+`uninstall` leert jetzt jedes Thema, das die Linie je retained gesendet haben
+kann: `online`, alle Datenpunkte aller Firmwarefassungen und die SG-Themen.
+Geleert wird direkt am Broker, mit den Zugangsdaten aus `general.json`, und in
+derselben Verbindung wird nachgelesen, höchstens drei Runden. Ein fremdes
+Thema unter demselben Präfix bleibt stehen. Ist der Broker nicht zu fragen
+(Anmeldung oder Abonnement abgewiesen), steht das als Warnung in der Ausgabe
+des Installers, statt „erledigt“ zu melden. Ein hängendes Leeren wird nach 60 s
+abgebrochen und nach weiteren 5 s hart beendet, auch das mit Warnung.
+
+### SG-Themen und alte Messwerte gehen flüchtig
+
+`sg/lage`, `laden`, `dimmen`, `fenster`, `naechster_start` und
+`naechster_preis` gelten für jetzt bzw. für das nächste Fenster. Sie gingen
+bisher retained hinaus: stand der Takt still, las Loxone nach einem Neustart
+ein Ladefenster, das längst vorbei war. Jetzt gehen sie flüchtig. Nach einem
+Neustart von Broker oder Gateway fehlen sie bis zum nächsten Takt, höchstens
+fünf Minuten.
+
+Die Altwerte räumt der SG-Lauf einmal am Broker ab. Der Merker
+`data/plugins/<ordner>/sg_retain_geraeumt` entsteht erst, wenn der Broker
+bestätigt, dass nichts mehr dasteht. Ist der Broker nicht zu fragen, gibt es
+keinen Merker. Dann geht in jedem Lauf über den UDP-Eingang eine leere
+Nachricht unmittelbar vor dem Wert hinaus. **Grenze:** Loxone sieht dabei für
+einen Augenblick einen leeren Wert.
+
+Messwerte und das Lebenszeichen, die Fassungen bis 3.0.10 retained gesendet
+haben, räumt der Dienst selbst ab. Liefert ihm der Broker beim Abonnieren so
+einen Altwert, wird er unmittelbar vor dem nächsten gültigen Wert gelöscht.
+Beim nächsten Abonnieren wird nachgelesen.
+
+### Wurzel, Archiv, Diensterkennung, Marke, Sicherung
+
+- **Wurzel:** Alle Wege suchen die LoxBerry-Wurzel nur noch dort, wo
+  `config/system/general.json` liegt. Danach gibt es keinen Rückfall mehr auf
+  „drei Ebenen hoch“ oder auf einen Pfad ab `/`. Das gilt für `wolf_server`,
+  Watchdog, `daemon`, `uninstall`, die Hakenskripte und `wi_lib.php`.
+  Vorher startete `wolf_server` in einem fremden Baum ohne LoxBerry einen
+  Dienst. `uninstall` löschte dort die Zweitschrift, und `preupgrade.sh`
+  legte `data/plugins` an.
+- **Archiv:** Aus einem ausgepackten Archiv unter einer echten Wurzel wird
+  nichts gestartet, angehalten oder gesendet: weder über `wolf_server` noch
+  über den Knopf „Dienst neu starten“ oder den SG-Lauf. Vorher griffen alle drei
+  auf die Anlage zu. Ausnahme: `LBHOMEDIR` und `LBPPLUGINDIR` sind beide
+  gesetzt.
+- **Diensterkennung:** Ein Prozess gilt nur als Dienst, wenn er genau
+  `<interpreter> <skript>` oder `perl -X <skript>` ist und dem Dienstbenutzer
+  gehört. Vor `kill -9` wird er noch einmal geprüft. Vorher wurde ein
+  `perl -e '…' <modulpfad>` mitbeendet, und ein SIGTERM-fester Dienst blieb
+  nach `stop` stehen.
+- **Marke:** Eine Marke, die bis zu 300 s in der Zukunft liegt, sperrt jetzt
+  auch in `wolf_server`, `cron.05min` und `daemon`, wie schon in der
+  Oberfläche.
+- **Sicherung nach Inhalt:** Zweitschrift und Upgrade-Sicherung gelten nur mit
+  einer Zeile `enable 0|1`. Eine Datei ohne Inhalt überschreibt keine gute
+  Zweitschrift mehr und wird nicht zurückgespielt. Die Meldungen sagen, was
+  wirklich geschah. Die Sicherung unter `/tmp` fällt nur nach gelungener
+  Rückholung.
+- **comtest:** Läuft über `timeout -k 5 20`. Ein Abbruch steht in der Antwort.
+
 ## Version 3.1.3 — kein zweiter Dienst, und eine Marke für die Aktualisierung
 
 Drei Dinge, alle in WSL Ubuntu gemessen (Prüfstand
@@ -214,8 +311,9 @@ die Zeile im Reiter Test wird rot, und das Thema `sg/dimmen` trägt `-1`.
 ### Über MQTT
 
 Sechs neue Themen unter `<präfix>/sg/`: `lage`, `laden`, `dimmen`, `fenster`,
-`naechster_start`, `naechster_preis` — Zustände, also retained — und `ts` als
-Lebenszeichen der Rechnung, nicht retained. Damit lässt sich der Fahrplan in
+`naechster_start`, `naechster_preis` — Zustände, also retained (seit 3.1.4
+flüchtig, siehe dort) — und `ts` als Lebenszeichen der Rechnung, nicht
+retained. Damit lässt sich der Fahrplan in
 Loxone anzeigen, ohne dass Loxone irgendetwas rechnen muss.
 
 ### Der Reiter Test

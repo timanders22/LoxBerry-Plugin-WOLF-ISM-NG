@@ -752,7 +752,18 @@ function wi_test_ausfuehren($was)
                     . wi_zeilen('PRUEF.C_AUS_', 1, 2) . "\n\n"
                     . wi_zeilen('PRUEF.C_AUS_', 3, 4));
             }
-            $ausgabe = wi_sh('timeout 20 perl ' . escapeshellarg($skript));
+            /* 'timeout -k 5 20' (Muster 13 der Nachlese): ohne -k schickt
+             * timeout nach 20 s nur SIGTERM, und ein Programm, das es nicht
+             * annimmt, hielt die Seite fest (Fall P7). 124 = abgebrochen,
+             * 137 = hart beendet; beides wird gesagt statt verschwiegen. */
+            $zeilen = array();
+            $rc = 0;
+            @exec('timeout -k 5 20 perl ' . escapeshellarg($skript) . ' 2>&1', $zeilen, $rc);
+            $ausgabe = implode("\n", $zeilen);
+            if ($rc === 124 || $rc === 137) {
+                $ausgabe = sprintf(wi_t('PRUEF.C_FRIST'), 20, $rc)
+                         . (trim($ausgabe) !== '' ? "\n\n" . $ausgabe : '');
+            }
             if (trim($ausgabe) === '') {
                 $ausgabe = wi_t('PRUEF.C_STILL_1') . "\n\n" . wi_zeilen('PRUEF.C_STILL_', 2, 5);
             }

@@ -42,8 +42,13 @@ if ($wi_geladen === '') {
     exit(1);
 }
 
-/* Schalter pruefen, bevor irgendetwas laeuft. */
-$wi_erlaubt = array('--einmal', '--trocken', '--selbsttest');
+/* Schalter pruefen, bevor irgendetwas laeuft.
+ *
+ * --mqtt-leeren (seit 3.1.4) gehoert nicht zum SG-Modul, steht aber hier,
+ * weil dies das eine PHP-Programm unter bin/ ist: uninstall/uninstall leert
+ * damit die zurueckbehaltenen Themen der Linie am Broker (wi_mqtt_leeren()).
+ * Rueckgabe dort: 0 bestaetigt leer, 1 nicht bestaetigt, 2 nicht ausfuehrbar. */
+$wi_erlaubt = array('--einmal', '--trocken', '--selbsttest', '--mqtt-leeren');
 $wi_modus = '--einmal';
 foreach ($argv as $wi_i => $wi_a) {
     if ($wi_i === 0 || strncmp((string) $wi_a, '--', 2) !== 0) {
@@ -153,6 +158,32 @@ if ($wi_modus === '--selbsttest') {
 }
 
 /* ==================================================================
+ * Nur in der Anlage (Muster 3 der Nachlese)
+ *
+ * Aus einem ausgepackten Archiv unter einer echten Wurzel - am Geraet steht
+ * LBHOMEDIR in /etc/environment - nahm dieses Programm bis 3.1.4 deren
+ * Konfiguration, UDP-Eingang und Befehls-Port (Fall S5,
+ * Pruefung-WOLF-ISM-NG-3.1.4). wi_paths() liefert dann keine Wurzel; hier
+ * wird ausgestiegen, bevor etwas gelesen, gesendet oder geschrieben wird.
+ * ================================================================== */
+if (wi_paths()['home'] === '') {
+    $wi_arch = wi_paths()['archiv'];
+    fwrite(STDERR, ($wi_arch !== ''
+        ? 'wolf_sg.php liegt nicht in der Installation unter ' . $wi_arch
+          . " (ausgepacktes Archiv oder Pruefordner).\n"
+        : "Es wurde kein LoxBerry-Wurzelverzeichnis gefunden.\n")
+        . "Es wurde nichts gelesen, gesendet oder geschrieben. Abhilfe: das Programm aus\n"
+        . "<Wurzel>/bin/plugins/<ordner> aufrufen oder LBHOMEDIR und LBPPLUGINDIR setzen.\n");
+    exit(2);
+}
+
+if ($wi_modus === '--mqtt-leeren') {
+    list($wi_rc, $wi_zeilen) = wi_mqtt_leeren(wi_config_read());
+    echo implode("\n", $wi_zeilen) . "\n";
+    exit($wi_rc);
+}
+
+/* ==================================================================
  * Regelbetrieb
  * ================================================================== */
 $cfg = wi_config_read();
@@ -169,38 +200,55 @@ $lage = wi_sg_lage($cfg);
 /* --- Veroeffentlichen ------------------------------------------------
  *
  * Ueber den UDP-Eingang des MQTT-Gateways, wie der Aufraeumer es auch tut.
- * Zustaende retained, das Lebenszeichen der Lage nicht - derselbe
- * Hausstandard wie im Auswertungsmodul.
  *
- * NICHT GEMESSEN: ob das Gateway diese Zeilen annimmt. Die Zeilenform
- * "retain <thema> <wert>" ist dokumentiert; ein Broker steht hier nicht. */
+ * Seit 3.1.4 geht ALLES fluechtig hinaus (Muster 6 der Nachlese, Regeln/07
+ * Abschnitt 3 mit dem Nachtrag vom 24.09.2026: Werte, die allein durch die
+ * Uhr falsch werden, sind nie retained). lage, laden, dimmen, fenster und
+ * naechster_* gelten fuer JETZT bzw. fuer das naechste Fenster; stirbt der
+ * Takt, blieb bis 3.1.4 z. B. "laden 1" fuer immer im Broker stehen, und
+ * nach einem Neustart von Broker oder Gateway las Loxone ein Ladefenster,
+ * das laengst vorbei war. Der Preis: nach einem solchen Neustart fehlen die
+ * Werte bis zum naechsten Takt (hoechstens fuenf Minuten).
+ *
+ * Die Altwerte der Vorfassungen raeumt wi_sg_altlast() ab (siehe dort). */
 $port = wi_mqtt_udpinport();
 $pre = wi_praefix();
 $gesendet_mqtt = 0;
 if ($port && wi_cfg($cfg, 'mqtt', '0') === '1') {
-    $themen = array(
-        array('retain', 'sg/lage', $lage['lage']),
-        array('retain', 'sg/laden', $lage['laden'] ? '1' : '0'),
-        array('retain', 'sg/dimmen', $lage['dimmen'] === null ? '-1' : ($lage['dimmen'] ? '1' : '0')),
-        array('retain', 'sg/fenster', (string) count($lage['fenster'])),
-        array('publish', 'sg/ts', (string) time()),
+    $werte = array(
+        'sg/lage'    => (string) $lage['lage'],
+        'sg/laden'   => $lage['laden'] ? '1' : '0',
+        'sg/dimmen'  => $lage['dimmen'] === null ? '-1' : ($lage['dimmen'] ? '1' : '0'),
+        'sg/fenster' => (string) count($lage['fenster']),
+        'sg/ts'      => (string) time(),
     );
     if ($lage['fenster']) {
         $naechstes = $lage['fenster'][0];
         foreach ($lage['fenster'] as $f) {
             if ($f['bis'] > time()) { $naechstes = $f; break; }
         }
-        $themen[] = array('retain', 'sg/naechster_start', (string) $naechstes['von']);
-        $themen[] = array('retain', 'sg/naechster_preis', (string) $naechstes['schnitt']);
+        $werte['sg/naechster_start'] = (string) $naechstes['von'];
+        $werte['sg/naechster_preis'] = (string) $naechstes['schnitt'];
     }
+    list($direkt, $ueber_udp_leeren) = wi_sg_altlast($pre, $werte);
     set_error_handler(function () { return true; });
     $sock = fsockopen('udp://127.0.0.1', (int) $port, $nr, $txt, 3);
     restore_error_handler();
     if ($sock) {
-        foreach ($themen as $t) {
-            // Jedes Argument ohne Trennzeichenbasteleien: Thema und Wert
-            // enthalten nach Bau nie Leerraum.
-            if (@fwrite($sock, $t[0] . ' ' . $pre . '/' . $t[1] . ' ' . $t[2] . "\n") !== false) {
+        foreach ($werte as $t => $w) {
+            if (isset($direkt[$t])) {
+                continue;   // ging mit dem Abraeumen schon am Broker hinaus
+            }
+            // Broker nicht zu fragen: der Altwert geht in JEDEM Lauf mit
+            // leerer Nutzlast unmittelbar vor dem gueltigen Wert hinaus -
+            // ohne Merker, denn fwrite() meldet auch fuer ein verworfenes
+            // Datagramm Erfolg (Regeln/07, "Ein Absender merkt nichts davon").
+            if (isset($ueber_udp_leeren[$t])) {
+                @fwrite($sock, 'retain ' . $pre . '/' . $t . " \n");
+                usleep(2000);
+            }
+            // Thema und Wert enthalten nach Bau nie Leerraum.
+            if (@fwrite($sock, 'publish ' . $pre . '/' . $t . ' ' . $w . "\n") !== false) {
                 $gesendet_mqtt++;
             }
             usleep(2000);
@@ -223,6 +271,69 @@ if ($gesendet_mqtt) {
 }
 exit(0);
 
+/**
+ * Die zurueckbehaltenen SG-Altwerte der Fassungen 3.1.0 bis 3.1.3 abraeumen.
+ *
+ * Rueckgabe array(direkt, ueber_udp_leeren), je array(thema => true):
+ *  - Merker liegt (Kennung "leer-bestaetigt <praefix>: <liste>"): nichts.
+ *  - Broker gefragt, nichts belegt: Merker schreiben, nichts.
+ *  - Broker gefragt, einige belegt: GENAU diese am Broker leeren, den
+ *    gueltigen Wert unmittelbar dahinter fluechtig in derselben Verbindung,
+ *    dann nachlesen; Merker erst, wenn der Broker nichts mehr liefert
+ *    (Vorbild VolkswagenID 0.9.24, Beschattungswaechter 0.9.21).
+ *  - Broker nicht zu fragen (CONNACK/SUBACK, Muster 11): KEIN Merker; alle
+ *    Themen gehen ueber UDP mit leerer Nutzlast vor dem Wert hinaus.
+ * Der Merker nennt Praefix und Themenliste; ein anderes Praefix oder eine
+ * andere Liste gilt nicht. purge_installation raeumt ihn bei jedem Update
+ * mit ab - dann wird einmal nachgefragt.
+ */
+function wi_sg_altlast($pre, array $werte)
+{
+    $liste = array('sg/lage', 'sg/laden', 'sg/dimmen', 'sg/fenster',
+                   'sg/naechster_start', 'sg/naechster_preis');
+    $p = wi_paths();
+    $merker = $p['home'] . '/data/plugins/' . $p['plugin'] . '/sg_retain_geraeumt';
+    $kennung = 'leer-bestaetigt ' . $pre . ': ' . implode(' ', $liste);
+    if (is_file($merker) && trim((string) @file_get_contents($merker)) === $kennung) {
+        return array(array(), array());
+    }
+    $filter = array($pre . '/sg/#');
+    $belegt = function ($f) use ($pre, $liste) {
+        $t = array();
+        foreach ($liste as $x) {
+            if (isset($f['belegt'][$pre . '/' . $x])) { $t[] = $x; }
+        }
+        return $t;
+    };
+    $f = wi_mqtt_sitzung($filter);
+    if ($f['lage'] !== 'ok') {
+        wi_log_sg('SG.M_ALT_UNBEKANNT', array($pre));
+        return array(array(), array_fill_keys($liste, true));
+    }
+    $direkt = array();
+    $alt = $belegt($f);
+    if ($alt) {
+        $senden = array();
+        foreach ($alt as $x) {
+            $senden[] = array($pre . '/' . $x, '', true);
+            if (isset($werte[$x])) {
+                $senden[] = array($pre . '/' . $x, $werte[$x], false);
+                $direkt[$x] = true;
+            }
+        }
+        $f = wi_mqtt_sitzung($filter, $senden);
+        wi_log_sg('SG.M_ALT_GELEERT', array(implode(', ', $alt)));
+        if ($f['lage'] !== 'ok' || $belegt($f)) {
+            return array($direkt, array());
+        }
+    }
+    if (!is_dir(dirname($merker))) {
+        @mkdir(dirname($merker), 0775, true);
+    }
+    @file_put_contents($merker, $kennung . "\n");
+    return array($direkt, array());
+}
+
 /** Eine Protokollzeile, gebremst: gleiche Meldung hoechstens stuendlich. */
 function wi_log_sg($schluessel, $args)
 {
@@ -235,6 +346,8 @@ function wi_log_sg($schluessel, $args)
         'SG.M_GESENDET'     => 'Datenpunkt %s auf %s gesetzt. Antwort: %s',
         'SG.M_TEILWEISE'    => 'NUR %d von %d Befehlen angekommen - der Merker bleibt stehen.',
         'MQTT'              => '%d MQTT-Zeilen an das Gateway.',
+        'SG.M_ALT_GELEERT'  => 'Zurueckbehaltene Altwerte am Broker geleert: %s.',
+        'SG.M_ALT_UNBEKANNT' => 'Der Broker liess sich nicht befragen - die frueher zurueckbehaltenen SG-Themen unter %s/sg/ gehen in jedem Lauf mit leerer Nutzlast vor dem Wert hinaus.',
     );
     $text = isset($texte[$schluessel]) ? vsprintf($texte[$schluessel], $args) : $schluessel;
     /* wi_log_file() sucht eine VORHANDENE Datei und liefert sonst nichts.

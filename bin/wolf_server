@@ -12,8 +12,6 @@
 ### END INIT INFO
 
 
-. $LBHOMEDIR/libs/bashlib/loxberry_log.sh
-
 # Der eigene Ablageort, nicht ${LBPBIN}/<fester Name>.
 #
 # Gemessen am 04.09.2026 mit einer Attrappe des Watchdogs:
@@ -26,11 +24,77 @@
 # Erfolg, weil die Wirkungsmessung mit demselben falschen Pfad sucht.
 # Der dritte ist der Zweitinstallations-Fall, vor dem die plugin.cfg
 # selbst warnt: LoxBerry haengt bei einer Namenskollision _01 an.
-BINPATH=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd)
-if [ -z "$BINPATH" ] || [ ! -f "$BINPATH/wolf_watchdog.sh" ]; then
+SELF=$(cd "$(dirname "$(readlink -f "$0")")" 2>/dev/null && pwd -P)
+if [ -z "$SELF" ] || [ ! -f "$SELF/wolf_watchdog.sh" ]; then
     echo "Wolf ISM8i: eigener Ablageort nicht bestimmbar - Abbruch." >&2
     exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Wurzel und Ordner: GELESEN oder gesucht, danach nichts mehr (Regeln/06,
+# Muster 1 und 3 der Nachlese; Bauart dienst.sh Spotpreis-Tibber 0.9.19).
+#
+# Bis 3.1.4 stand hier "$BINPATH/../../.." ohne jede Pruefung, und
+# ". $LBHOMEDIR/libs/bashlib/loxberry_log.sh" las bei leerem LBHOMEDIR ab
+# der Laufwerkswurzel. In WSL gemessen (Pruefung-WOLF-ISM-NG-3.1.4): in einem
+# fremden Baum ohne general.json startete "start" einen Watchdog (Fall W1),
+# und aus einem ausgepackten Archiv unter der echten Wurzel ebenso (W2).
+#   1. $LBHOMEDIR, wenn es config/plugins und data/plugins traegt;
+#   2. aufwaerts suchen, bis config/plugins, data/plugins UND
+#      config/system/general.json da sind.
+# Die Anlage gilt nur, wenn dieses Skript in ihrem bin-Ordner liegt oder der
+# Aufrufer LBHOMEDIR UND LBPPLUGINDIR nennt.
+# ---------------------------------------------------------------------------
+wi_wurzel_suchen() {
+    local v="$SELF" i=0
+    while [ -n "$v" ] && [ "$v" != "/" ] && [ "$i" -lt 8 ]; do
+        if [ -d "$v/config/plugins" ] && [ -d "$v/data/plugins" ] \
+           && [ -f "$v/config/system/general.json" ]; then
+            echo "$v"
+            return 0
+        fi
+        v=$(dirname "$v")
+        i=$((i + 1))
+    done
+    return 1
+}
+if [ -n "${LBHOMEDIR:-}" ] && [ -d "$LBHOMEDIR/config/plugins" ] \
+   && [ -d "$LBHOMEDIR/data/plugins" ]; then
+    WURZEL=$(cd "$LBHOMEDIR" && pwd -P)
+else
+    WURZEL=$(wi_wurzel_suchen) || WURZEL=""
+fi
+if [ -z "$WURZEL" ]; then
+    echo "Wolf ISM8i: es wurde kein LoxBerry-Wurzelverzeichnis gefunden (LBHOMEDIR"
+    echo "ist nicht gesetzt, und oberhalb von $SELF traegt kein Verzeichnis"
+    echo "config/plugins, data/plugins und config/system/general.json)."
+    echo "Es wurde nichts gestartet und nichts angehalten."
+    [ "${1:-}" = "status" ] && exit 4
+    exit 1
+fi
+PNAME="${LBPPLUGINDIR:-}"
+PNAME="${PNAME%/}"
+PNAME="${PNAME##*/}"
+[ -n "$PNAME" ] || PNAME=$(basename "$SELF")
+WI_AUSDRUECKLICH=0
+if [ -n "${LBPPLUGINDIR:-}" ] && [ -n "${LBHOMEDIR:-}" ] \
+   && [ "$WURZEL" = "$(cd "$LBHOMEDIR" 2>/dev/null && pwd -P)" ] \
+   && [ -d "$WURZEL/config/plugins/$PNAME" ]; then
+    WI_AUSDRUECKLICH=1
+fi
+if [ "$SELF" != "$(readlink -f "$WURZEL/bin/plugins/$PNAME" 2>/dev/null)" ] \
+   && [ "$WI_AUSDRUECKLICH" != "1" ]; then
+    echo "Wolf ISM8i: $SELF ist nicht der bin-Ordner von '$PNAME' unter $WURZEL,"
+    echo "und LBHOMEDIR und LBPPLUGINDIR nennen die Anlage nicht beide. Der Aufruf"
+    echo "kommt offenbar aus einem ausgepackten Archiv oder einem Pruefordner."
+    echo "Es wurde nichts gestartet und nichts angehalten."
+    [ "${1:-}" = "status" ] && exit 4
+    exit 1
+fi
+# Die Pfade DER ANLAGE. Installiert ist das derselbe Ordner wie SELF.
+BINPATH="$WURZEL/bin/plugins/$PNAME"
+# Der Watchdog liest daraus seine Protokollbibliothek.
+export LBHOMEDIR="$WURZEL"
 
 # ---------------------------------------------------------------------------
 # Laeuft gerade eine Aktualisierung dieses Plugins?
@@ -53,11 +117,7 @@ fi
 # WI_START_TROTZ_MARKE=1 setzt nur postupgrade.sh: dort ist die Marke die
 # eigene, und der Start ist der letzte Schritt der Installation.
 # ---------------------------------------------------------------------------
-LBWURZEL=$(cd "$BINPATH/../../.." 2>/dev/null && pwd)
-MARKE=""
-if [ -n "$LBWURZEL" ]; then
-    MARKE="$LBWURZEL/data/plugins/$(basename "$BINPATH").upgrade_laeuft"
-fi
+MARKE="$WURZEL/data/plugins/$PNAME.upgrade_laeuft"
 
 upgrade_laeuft() {
     [ "${WI_START_TROTZ_MARKE:-0}" = "1" ] && return 1
@@ -77,54 +137,104 @@ upgrade_laeuft() {
         ''|*[!0-9]*) return 0 ;;
     esac
     ALTER=$(( JETZT - SEIT ))
-    [ "$ALTER" -ge 0 ] && [ "$ALTER" -lt 3600 ]
+    # Bis 300 s "Zukunft" gilt sie noch: die Uhr kann nach dem Setzen ein
+    # Stueck zurueckspringen (Muster 8 der Nachlese, Govee 0.9.20). Bis 3.1.4
+    # stand hier -ge 0, und eine 200 s vorauseilende Marke sperrte nichts
+    # (Fall W7).
+    [ "$ALTER" -ge -300 ] && [ "$ALTER" -lt 3600 ]
 }
 
 # ---------------------------------------------------------------------------
-# Prozesssuche - bitte nicht auf pkill zurueckbauen
+# Prozesssuche ARGUMENTWEISE ueber /proc/<pid>/cmdline - nie pkill -f
 #
-# "pkill -f wolf_ism8i.pl" durchsucht die GANZE Befehlszeile jedes Prozesses
-# und trifft damit auch einen Editor mit offener Datei oder ein zweites
-# Exemplar des Plugins. "ps -C" und "killall" vergleichen den comm-Namen, der
-# bei einem Skript mit Shebang "bash" bzw. "perl" lautet - die finden nichts.
+# Ein Treffer hat genau eine dieser Formen, und der Prozess gehoert dem
+# Dienstbenutzer (loxberry, wo es ihn nicht gibt der eigene):
+#   <bash|sh|dash|perl> <skript>      Start ueber den Shebang
+#   perl -X <skript>                  so startet der Watchdog das Modul
+# <skript> ist zeichengenau der erwartete Pfad (relativ gestartet gegen
+# /proc/<pid>/cwd aufgeloest, zusaetzlich ueber readlink -f verglichen). Ein
+# weiteres Argument ist ein Einmallauf, kein Dienst.
 #
-# Ein Treffer liegt vor, wenn das erste Argument der volle Skriptpfad ist
-# (Shebang-Start) oder wenn das erste Argument ein Interpreter ist UND der
-# volle Pfad unter den Argumenten steht (der Watchdog startet das
-# Auswertungsmodul als "perl -X <pfad>").
+# Bis 3.1.4 genuegte "Interpreter vorn und der Pfad IRGENDWO unter den
+# Argumenten" (grep -qxF): ein "perl -e '...' <modulpfad>" galt als Dienst
+# und wurde beendet (Faelle W4, W5, W15, Pruefung-WOLF-ISM-NG-3.1.4), und vor
+# kill -9 wurde nicht noch einmal geprueft. Bauart tb_ist_dienst()
+# (Spotpreis-Tibber 0.9.19); dieselbe Regel steht in wi_ist_prozess()
+# (webfrontend/htmlauth/wi_lib.php).
 # ---------------------------------------------------------------------------
-wolf_beenden() {
-    SKRIPT="$1"
-    for D in /proc/[0-9]*; do
-        P=$(basename "$D")
-        [ -r "$D/cmdline" ] || continue
-        ARGS=$(tr '\0' '\n' < "$D/cmdline" 2>/dev/null)
-        ERSTES=$(printf '%s\n' "$ARGS" | head -1)
-        if [ "$ERSTES" = "$SKRIPT" ] ||
-           { case "$(basename "$ERSTES")" in perl|bash|sh|dash) true ;; *) false ;; esac &&
-             printf '%s\n' "$ARGS" | grep -qxF "$SKRIPT"; }; then
-            kill "$P" 2>/dev/null
-        fi
+WI_DIENST_UID=$(id -u loxberry 2>/dev/null || id -u)
+wi_ist_dienst() {   # $1 PID  $2 erwarteter Skriptpfad
+    local a0 a1 a2 a3 pfad wd
+    [ -r "/proc/$1/cmdline" ] || return 1
+    [ "$(stat -c %u "/proc/$1" 2>/dev/null)" = "$WI_DIENST_UID" ] || return 1
+    a0=""; a1=""; a2=""; a3=""
+    { IFS= read -r -d "" a0; IFS= read -r -d "" a1; IFS= read -r -d "" a2
+      IFS= read -r -d "" a3; } 2>/dev/null < "/proc/$1/cmdline"
+    pfad=""
+    case "${a0##*/}" in
+        bash|sh|dash|perl)
+            if [ -n "$a1" ] && [ -z "$a2" ]; then
+                pfad="$a1"
+            elif [ "${a0##*/}" = "perl" ] && [ "$a1" = "-X" ] && [ -n "$a2" ] && [ -z "$a3" ]; then
+                pfad="$a2"
+            fi ;;
+    esac
+    [ -n "$pfad" ] || return 1
+    case "$pfad" in
+        /*) ;;
+        *)  wd=$(readlink "/proc/$1/cwd" 2>/dev/null) || return 1
+            pfad="${wd% (deleted)}/$pfad" ;;
+    esac
+    [ "$pfad" = "$2" ] && return 0
+    [ -n "$(readlink -f "$2" 2>/dev/null)" ] || return 1
+    [ "$(readlink -f "$pfad" 2>/dev/null)" = "$(readlink -f "$2" 2>/dev/null)" ]
+}
+
+wi_dienste() {   # PIDs zu einem oder mehreren Skriptpfaden
+    local d p s
+    for d in /proc/[0-9]*; do
+        p="${d#/proc/}"
+        for s in "$@"; do
+            if wi_ist_dienst "$p" "$s"; then echo "$p"; break; fi
+        done
     done
 }
 
-# Laeuft ein Prozess zu diesem Skriptpfad? Gleiche Erkennung wie
-# wolf_beenden, nur ohne zu toeten.
-wolf_laeuft() {
-    SKRIPT="$1"
-    for D in /proc/[0-9]*; do
-        [ -r "$D/cmdline" ] || continue
-        ARGS=$(tr '\0' '\n' < "$D/cmdline" 2>/dev/null)
-        ERSTES=$(printf '%s\n' "$ARGS" | head -1)
-        if [ "$ERSTES" = "$SKRIPT" ] ||
-           { case "$(basename "$ERSTES")" in perl|bash|sh|dash) true ;; *) false ;; esac &&
-             printf '%s\n' "$ARGS" | grep -qxF "$SKRIPT"; }; then
-            return 0
-        fi
+wolf_laeuft() {   # laeuft ein Prozess zu diesem Skriptpfad?
+    local d
+    for d in /proc/[0-9]*; do
+        wi_ist_dienst "${d#/proc/}" "$1" && return 0
     done
     return 1
 }
 
+# Alle Treffer der uebergebenen Pfade gemeinsam beenden: erst SIGTERM an
+# alle - dann endet der Watchdog nach seinem Modul von selbst (on_die) -,
+# bis zu fuenf Sekunden warten, und vor kill -9 jeden Treffer noch einmal
+# argumentweise pruefen (eine freigewordene Nummer kann inzwischen einem
+# fremden Prozess gehoeren).
+wolf_beenden() {
+    local pids p i offen s
+    pids=$(wi_dienste "$@")
+    [ -n "$pids" ] || return 0
+    for p in $pids; do kill "$p" 2>/dev/null; done
+    for i in 1 2 3 4 5; do
+        offen=0
+        for p in $pids; do
+            for s in "$@"; do
+                wi_ist_dienst "$p" "$s" && offen=1
+            done
+        done
+        [ "$offen" -eq 0 ] && break
+        sleep 1
+    done
+    for p in $pids; do
+        for s in "$@"; do
+            if wi_ist_dienst "$p" "$s"; then kill -9 "$p" 2>/dev/null; break; fi
+        done
+    done
+    return 0
+}
 # Carry out specific functions when asked to by the system
 case "$1" in
   'start')
@@ -163,8 +273,7 @@ case "$1" in
     # beendet zuerst. Gegenprobe im Pruefstand: Fall C7s, Rueckgabewert 0
     # bei liegender Marke.
     echo "Stopping Wolf ISM8i server"
-    wolf_beenden "${BINPATH}/wolf_watchdog.sh"
-    wolf_beenden "${BINPATH}/wolf_ism8i.pl"
+    wolf_beenden "${BINPATH}/wolf_watchdog.sh" "${BINPATH}/wolf_ism8i.pl"
     # RETVAL=$? nach wolf_beenden trug keine Aussage - die Funktion endet
     # immer erfolgreich, stop meldete also IMMER Erfolg. Gemessen wird
     # jetzt die WIRKUNG.
@@ -187,8 +296,7 @@ case "$1" in
         RETVAL=0
     else
         echo "Restarting Wolf ISM8i server"
-        wolf_beenden "${BINPATH}/wolf_watchdog.sh"
-        wolf_beenden "${BINPATH}/wolf_ism8i.pl"
+        wolf_beenden "${BINPATH}/wolf_watchdog.sh" "${BINPATH}/wolf_ism8i.pl"
         # Hier stand ein RETVAL=$? nach wolf_beenden - eine tote
         # Zuweisung, drei Zeilen spaeter ueberschrieben.
         sleep 1

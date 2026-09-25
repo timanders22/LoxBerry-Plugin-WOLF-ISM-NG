@@ -112,6 +112,22 @@ my $mqtt;
 my %mqtt_values;
 my $online_state = 0;
 my $online_gesendet;   # undef, bis der Zustand einmal hinausgegangen ist
+# Kennung der Verbindung zum Broker, an der eine Neuverbindung zu erkennen ist
+# (mqtt_signatur()). Net::MQTT::Simple verbindet nach einem Abriss selbst neu
+# und schickt dabei den Letzten Willen wieder mit, sagt es dem Aufrufer aber
+# nicht (am Geraet gelesen 25.09.2026, libs/perllib/Net/MQTT/Simple.pm,
+# _connect Z. 147-181, _send_connect Z. ~221-239). Hat der Broker beim Abriss
+# den Letzten Willen "0" gesetzt, stand bis 3.1.4 "online 0" im Broker, bis
+# das ISM8 seinen Zustand wechselte - auch wenn Dienst und ISM8 liefen.
+my $mqtt_sig = '';
+my $online_korrektur = 0;  # Zeit der letzten Berichtigung (Bremse gegen Pendeln)
+# Themen, die der Broker beim Abonnieren als ZURUECKBEHALTEN geliefert hat.
+# Geht auf eines davon ein fluechtiger Wert hinaus, wird der Altwert
+# unmittelbar davor mit leerer Nutzlast abgeraeumt (fluechtig_senden()).
+# Nachgelesen wird bei jedem Abonnieren: steht er dann noch da, kommt er
+# wieder hier an. Ein Merker ist deshalb nicht noetig.
+my %altlast;
+my %geleert;           # eigene Loeschungen, deren Echo zu ueberhoeren ist
 my %ism8_puffer;       # Rest eines unvollstaendig gelesenen Telegramms, JE Verbindung
 my %ism8_clients;      # alle offenen ISM8-Verbindungen, nach fileno
 my %cmd_clients;       # offene Befehlsverbindungen, nach fileno
@@ -233,6 +249,16 @@ sub connect_MQTT
             $mqtt->last_will("$hash{praefix}/online", "0", 1);
             $mqtt->subscribe("$hash{praefix}/#", \&received_MQTT);
             $mqtt_praefix = $hash{praefix};
+            # Die Geburtsnachricht zum Letzten Willen (Regeln/07, Abschnitt
+            # 3, Bedingung a) sendet neuverbindung_pruefen() nach dem
+            # naechsten tick(): die Kennung ist hier leer, jede Verbindung -
+            # die erste, eine nach SIGHUP und jede Neuverbindung der
+            # Bibliothek - gilt dort als neu. Bis 3.1.4 ging "online" erst
+            # beim naechsten ISM8-Wechsel hinaus; stand vom letzten Abriss
+            # noch die "0" des Letzten Willens im Broker, blieb sie stehen.
+            # "online" heisst weiter "das ISM8 ist verbunden" (Entscheidung
+            # 25.09.2026): ohne ISM8 ist die Ansage 0, nicht 1.
+            $mqtt_sig = '';
         } else {
             LOGWARN("Keine Verbindung zum MQTT-Broker. Der Server laeuft "
                   . "weiter; MQTT-Werte gehen bis auf Weiteres nicht hinaus.");
@@ -264,9 +290,71 @@ sub publish_MQTT($$$;$)
     if ($mqtt) {
         LOGINF(encode('UTF-8', "publish Data: $id on MQTT topic $topic: $value"
                               . ($retain ? " (retained)" : "")));
-        if ($retain) { $mqtt->retain($topic, $value); }
-        else         { $mqtt->publish($topic, $value); }
+        if ($retain) { delete $altlast{thema_schluessel($topic)}; $mqtt->retain($topic, $value); }
+        else         { fluechtig_senden($topic, $value); }
     }
+}
+
+sub fluechtig_senden
+# Einen Wert FLUECHTIG senden. Hat der Broker unter diesem Thema einen
+# zurueckbehaltenen Altwert geliefert (Fassungen bis 3.0.10 sandten jeden
+# Messwert und das Lebenszeichen retained), wird er unmittelbar davor mit
+# leerer Nutzlast geloescht - direkt am Broker, nicht ueber das Gateway.
+{
+    my ($topic, $value) = @_;
+    return unless $mqtt;
+    if (delete $altlast{thema_schluessel($topic)}) {
+        LOGINF(encode('UTF-8', "Zurueckbehaltener Altwert unter $topic wird abgeraeumt."));
+        $geleert{thema_schluessel($topic)} = 1;
+        $mqtt->retain($topic, '');
+    }
+    $mqtt->publish($topic, $value);
+}
+
+sub thema_schluessel
+# Ein Thema als Schluessel fuer %altlast und %geleert: immer als UTF-8-Bytes.
+# Die Themen entstehen hier aus Zeichenketten mit Umlauten ("Heizgerät",
+# "Störung"); was die Bibliothek beim Empfang uebergibt, kann in der
+# Pruefstands-Attrappe als Bytes ankommen. Ohne diese eine Form fand das
+# Abraeumen die Umlaut-Themen nicht (gemessen, Fall M9).
+{
+    my $t = defined $_[0] ? $_[0] : '';
+    utf8::encode($t) if utf8::is_utf8($t);
+    return $t;
+}
+
+sub mqtt_signatur
+# Woran eine (Neu-)Verbindung zu erkennen ist: der Socket, den
+# Net::MQTT::Simple in _connect neu anlegt, und die Zeit des Verbindens.
+# Leer, solange keine Verbindung steht.
+{
+    return '' unless $mqtt and ref($mqtt) and defined $mqtt->{socket};
+    return "$mqtt->{socket}|" . (defined $mqtt->{last_connect} ? $mqtt->{last_connect} : '');
+}
+
+sub neuverbindung_pruefen
+# Nach jedem tick(): hat die Bibliothek neu verbunden, geht der aktuelle
+# Stand von "online" retained hinaus. Der Letzte Wille des abgerissenen
+# Verbindungsstuecks hat dort sonst eine "0" hinterlassen.
+{
+    return unless $mqtt and $hash{mqtt} eq '1';
+    my $sig = mqtt_signatur();
+    return if $sig eq '' or $sig eq $mqtt_sig;
+    LOGINF("MQTT-Verbindung neu aufgebaut - online wird neu angesagt ("
+         . ($online_state ? 1 : 0) . ").") if $mqtt_sig ne '';
+    $mqtt_sig = $sig;
+    online_ansagen();
+}
+
+sub online_ansagen
+# Den aktuellen Stand von "online" retained senden, unabhaengig davon, ob er
+# sich geaendert hat.
+{
+    return unless $hash{mqtt} eq '1' and $mqtt;
+    my $w = $online_state ? 1 : 0;
+    LOGINF("publish online state to MQTT topic $hash{praefix}/online: $w (Ansage)");
+    $mqtt->retain("$hash{praefix}/online", $w);
+    $online_gesendet = 1;
 }
 
 sub ist_zustand($)
@@ -288,7 +376,30 @@ sub received_MQTT
 {
     my ($topic, $message, $retained) = @_;
     LOGDEB(encode('UTF-8', "incoming MQTT message: $topic: $message retained: $retained"));
+    $message = '' unless defined $message;
+    # Das Echo der eigenen Loeschung (fluechtig_senden) ist kein Befehl und
+    # darf den gemerkten Stand nicht wegwerfen.
+    if ($message eq '' and delete $geleert{thema_schluessel($topic)}) {
+        return;
+    }
+    # "online" gehoert dem Dienst. Kommt dort etwas anderes an als der eigene
+    # Stand - der Letzte Wille eines abgerissenen Verbindungsstuecks, den der
+    # Broker erst nach der neuen Ansage setzt -, wird neu angesagt;
+    # hoechstens alle fuenf Sekunden, damit zwei Dienste nicht pendeln.
+    if ($topic eq "$hash{praefix}/online" and $message ne ''
+        and $message ne ($online_state ? '1' : '0')) {
+        if (time - $online_korrektur >= 5) {
+            $online_korrektur = time;
+            online_ansagen();
+        }
+        return;
+    }
     if ($retained) {
+        # Zurueckbehalten und nicht leer: vormerken. Geht spaeter ein
+        # FLUECHTIGER Wert auf dieses Thema, wird der Altwert davor geloescht
+        # (fluechtig_senden). Ein Zustand geht selbst retained hinaus und
+        # ersetzt ihn (publish_MQTT).
+        $altlast{thema_schluessel($topic)} = 1 if $message ne '';
         LOGDEB("Ignoring retained state...");
         return;
     }
@@ -616,8 +727,8 @@ sub start_event_loop($$) {
                 # Retained zeigte es einem neu abonnierenden Empfaenger auch
                 # dann noch einen Zeitstempel und einen Zaehlerstand, wenn
                 # der Dienst laengst tot war - genau das, wogegen es da ist.
-                $mqtt->publish("$hash{praefix}/zeitstempel", $jetzt);
-                $mqtt->publish("$hash{praefix}/zaehler", $zaehler_umlauf);
+                fluechtig_senden("$hash{praefix}/zeitstempel", $jetzt);
+                fluechtig_senden("$hash{praefix}/zaehler", $zaehler_umlauf);
             }
             # Auf dem UDP-Weg gibt es keinen retained-Speicher; dort ist der
             # umlaufende Zaehler das einzige, woran eine Aenderungs-
@@ -690,9 +801,20 @@ sub start_event_loop($$) {
                     eval { $mqtt->unsubscribe("$mqtt_praefix/#"); 1; }
                         or LOGWARN("Abbestellen von $mqtt_praefix/# misslungen: $@");
                 }
+                my $alt_verbunden = $mqtt_praefix;
                 $mqtt = undef;
                 %mqtt_values = ();   # sonst gilt der alte Stand fuer neue Themen
+                %altlast = ();
+                %geleert = ();
+                $mqtt_sig = '';
                 connect_MQTT();
+                # Unter dem ALTEN Praefix liest niemand mehr "online"; dort
+                # stuende sonst fuer immer der letzte Stand oder die "0" des
+                # Letzten Willens. Geleert wird ueber die neue Verbindung.
+                if ($mqtt and $alt_verbunden ne '' and $alt_verbunden ne $hash{praefix}) {
+                    LOGINF("Altes Thema $alt_verbunden/online wird geleert.");
+                    $mqtt->retain("$alt_verbunden/online", '');
+                }
             }
             if ($hash{port} ne $alt_port or $hash{inport} ne $alt_in
                 or $hash{mcport} ne $alt_mcp) {
@@ -825,6 +947,7 @@ sub start_event_loop($$) {
 
         if ($mqtt) {
             $mqtt->tick();
+            neuverbindung_pruefen();
         }
     }
 

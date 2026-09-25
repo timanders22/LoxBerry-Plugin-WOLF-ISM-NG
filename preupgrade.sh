@@ -48,10 +48,20 @@ PTEMPPATH=$6  # Sixth argument is full temp path during install (see also $1)
 # data/plugins/<ordner>/ mitsamt allem, was darin liegt. Die Argumente sind
 # dieselben wie unten - $3 der Ordner, $5 die LoxBerry-Wurzel.
 # ---------------------------------------------------------------------------
+#
+# Die Wurzel gilt nur mit config/plugins UND data/plugins darunter (Regeln/06,
+# Muster 1 der Nachlese). Bis 3.1.4 legte "mkdir -p $WI_BASE/data/plugins"
+# den Ordner in jedem Verzeichnis an - bei leerem $5 und LBHOMEDIR ab der
+# Laufwerkswurzel (Fall W17, Pruefung-WOLF-ISM-NG-3.1.4). Ohne brauchbare
+# Wurzel wird gewarnt, nichts angelegt und nichts gesichert.
 WI_BASE="${5:-$LBHOMEDIR}"
 WI_PDIR="${3:-wolf_ng}"
+if [ -z "$WI_BASE" ] || [ ! -d "$WI_BASE/config/plugins" ] || [ ! -d "$WI_BASE/data/plugins" ]; then
+    echo "<WARNING> Die LoxBerry-Wurzel ('$WI_BASE') traegt kein config/plugins und"
+    echo "<WARNING> data/plugins - es wurde nichts gesperrt und nichts gesichert."
+    exit 1
+fi
 WI_MARKE="$WI_BASE/data/plugins/$WI_PDIR.upgrade_laeuft"
-mkdir -p "$WI_BASE/data/plugins" 2>/dev/null
 date +%s > "$WI_MARKE" 2>/dev/null
 if [ -s "$WI_MARKE" ]; then
     echo "<OK> Dienststart bis zum Ende der Installation gesperrt."
@@ -59,6 +69,14 @@ else
     echo "<WARNING> Die Marke $WI_MARKE liess sich nicht anlegen - der"
     echo "<WARNING> Waechter kann den Dienst waehrend der Installation starten."
 fi
+
+# Traegt eine Konfigurationsdatei Inhalt? Entschieden nach INHALT, nie nach
+# Groesse (Muster 9 der Nachlese): eine Zeile "enable 0" oder "enable 1", die
+# der Dienst und daemon/daemon lesen. Dieselbe Regel steht in postinstall.sh
+# und postupgrade.sh.
+wi_hat_inhalt() {
+    [ -f "$1" ] && grep -Eiq '^[[:space:]]*enable[[:space:]]+[01][[:space:]]*$' "$1"
+}
 
 # Combine them with /etc/environment
 PCGI=$LBPCGI/$PDIR
@@ -113,6 +131,9 @@ mkdir -p "$SICHERUNG"
 # Ausgebaut am 02.09.2026. Die Schwesterlinie Smartmeter classic hatte
 # denselben Merker schon in 2.3.14 aus demselben Grund entfernt.
 
+# Der Konfigurationsordner aus der geprueften Wurzel, nicht aus $LBPCONFIG:
+# fehlt das in der Umgebung, hiess es bis 3.1.4 "/<ordner>" (Muster 2).
+PCONFIG="$WI_BASE/config/plugins/$WI_PDIR"
 echo "<INFO> Backing up existing config files $PCONFIG/* -> $SICHERUNG/"
 cp -p -r "$PCONFIG/." "$SICHERUNG/" 2>/dev/null || true
 
@@ -126,13 +147,26 @@ cp -p -r "$PCONFIG/." "$SICHERUNG/" 2>/dev/null || true
 # an postupgrade.sh. Laeuft das aus irgendeinem Grund nicht durch, greift
 # jetzt postinstall.sh auf diese Zweitschrift zu - sie liegt ausserhalb des
 # ueberschriebenen Ordners und wird vom Installer nicht angefasst.
-NETZ_BASE="${5:-$LBHOMEDIR}"
-NETZ_PDIR="${3:-wolf_ng}"
+#
+# Nur eine Datei MIT Inhalt wird zur Zweitschrift, und die Meldung sagt, was
+# geschah. Bis 3.1.4 genuegte "[ -s ]": eine Konfiguration ohne Inhalt
+# ueberschrieb eine gute Zweitschrift, und "angelegt" stand immer da
+# (Fall W18).
+NETZ_BASE="$WI_BASE"
+NETZ_PDIR="$WI_PDIR"
 NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
-if [ -s "$NETZ_CFG/wolf_ism8i.conf" ]; then
-    cp -p "$NETZ_CFG/wolf_ism8i.conf" "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_ism8i.conf" 2>/dev/null \
-        && chmod 0600 "$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_ism8i.conf" 2>/dev/null
+NETZ_ZWEIT="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_ism8i.conf"
+if wi_hat_inhalt "$NETZ_CFG/wolf_ism8i.conf"; then
+    if cp -p "$NETZ_CFG/wolf_ism8i.conf" "$NETZ_ZWEIT" 2>/dev/null \
+       && chmod 0600 "$NETZ_ZWEIT" 2>/dev/null \
+       && cmp -s "$NETZ_CFG/wolf_ism8i.conf" "$NETZ_ZWEIT"; then
+        echo "<INFO> Zweitschrift der Einstellungen angelegt."
+    else
+        echo "<WARNING> Die Zweitschrift $NETZ_ZWEIT liess sich nicht anlegen."
+    fi
+else
+    echo "<WARNING> $NETZ_CFG/wolf_ism8i.conf fehlt oder traegt keinen Inhalt -"
+    echo "<WARNING> die vorhandene Zweitschrift bleibt unveraendert."
 fi
-echo "<INFO> Zweitschrift der Einstellungen angelegt."
 
 exit 0
