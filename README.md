@@ -23,6 +23,22 @@ Die Kette: **Dr. Mugur Dietrich** (Auswertungsmodul, 2017) → **Dominik
 Holland** ([Gagi2k/LoxBerry-Plugin-WolfIsm8](https://github.com/Gagi2k/LoxBerry-Plugin-WolfIsm8),
 Einbettung als LoxBerry-Plugin) → diese Fortführung.
 
+## Version 3.1.6
+
+Baustein-Liste zum Nachbauen (Nachzug B: X-8, Hausregel A4).
+Gemessen mit der gerenderten Oberfläche unter PHP 7.4 und 8.5 gegen die mitgelieferten Vorlagen; nicht am Gerät.
+
+* **Baustein-Liste vollständig:** Die Liste im Reiter „Einbindung in Loxone“ nennt jetzt die vier Vorlagen
+  (Wolf ISM8 MQTT Eingänge/Ausgänge, Wolf ISM8 UDP-Eingänge/TCP-Ausgänge) mit ihren Titeln und den Lebenszeichen-Eingängen,
+  und an jedem Baustein den Namen des Eingangs bzw. Befehls, an den er gehört (Beispiele aus der eingestellten Firmware,
+  je Weg MQTT und UDP/TCP). 15 statt 8 Zeilen.
+* **Ausfallerkennung berichtigt:** Die Änderungsüberwachung des Lebenszeichens ist EIN, solange Lebenszeichen kommen –
+  in die Sammelstörung gehört ihre Umkehrung (NICHT); dazu NICHT an `online`. Die Sammelstörung ist eine ODER-Kaskade
+  mit je zwei Eingängen statt eines ODER mit „so vielen Eingängen wie Störmeldungen“.
+* **In Loxone:** Wer die Sammelstörung nach der alten Liste gebaut hat (Ausgang der Änderungsüberwachung direkt im ODER),
+  hat ein ODER, das EIN steht, solange alles läuft – eine echte Störung erzeugt dann keinen Wechsel und keine Meldung,
+  ein Ausfall des Lebenszeichens schaltet es sogar AUS. Nach der neuen Liste umbauen (#6 bis #11).
+
 ## Version 3.1.5
 
 Durchgang mit vier Prüfern (Befunde: `Pruefung-Durchgang-2026-09-29/WOLF-ISM-NG_BEFUNDE_UND_VERBESSERUNGEN.md`, Entscheidungen 1, 8, 16, 19, 26, 31).

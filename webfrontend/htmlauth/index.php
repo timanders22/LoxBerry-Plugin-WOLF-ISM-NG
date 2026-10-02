@@ -1347,19 +1347,70 @@ $wi_sgm = wi_sg_merker();
 <div class="sm-small"><?= wi_t('LOXONE.V_UDP_HINT') ?></div>
 </form>
 
+<?php /* X-8 (G4, 02.10.2026, Entscheidung 36): die Liste nennt die vier Vorlagen und
+         deren Eingaenge mit den Titeln, die wi_vorlage() vergibt - aus deren Ausgabe
+         gelesen, nicht abgeschrieben -, und Beispielnamen der Datenpunkte aus der
+         Datenpunkttabelle der eingestellten Firmware (MQTT-Name wie wi_vorlage:
+         wi_topic(), "/" -> "_"; UDP/TCP-Titel "<Geraet> <Name>"). Regel A4: die
+         Sammelstoerung ist eine ODER-Kaskade mit je zwei Eingaengen.
+         Zeile: array(Kennung, Typ, Name, Parameter, Argumente, Verbindung, Argumente);
+         Name als array('t', Schluessel) oder array('w', fertiger Wert). {Bn} -> #n. */
+$wi_bv = array();
+foreach (array('mqtt_in', 'mqtt_out', 'udp_in', 'tcp_out') as $wi_a) {
+    $wi_x = wi_vorlage($wi_a, $wi_cfg, array());
+    preg_match_all('/ Title="([^"]*)"/', (string) $wi_x[1], $wi_m);
+    $wi_bv[$wi_a] = array();
+    foreach ($wi_m[1] as $wi_t1) { $wi_bv[$wi_a][] = html_entity_decode($wi_t1, ENT_QUOTES, 'UTF-8'); }
+    $wi_bv[$wi_a] += array('', '', '', '');
+}
+$wi_bdp = array();
+foreach ($wi_dps as $wi_d) { $wi_bdp[(int) $wi_d['id']] = $wi_d; }
+$wi_bm = function ($t) { return '<span class="sm-mono">' . wi_e($t) . '</span>'; };
+$wi_bpunkt = function ($id, $aus) use ($wi_bdp, $wi_bm) {
+    if (!isset($wi_bdp[$id])) { return wi_t('BAUSTEIN.DP_FEHLT'); }
+    $d = $wi_bdp[$id];
+    $mq = str_replace('/', '_', wi_topic($d));
+    $ud = $d['geraet'] . ' ' . $d['name'];
+    return $aus ? sprintf(wi_t('BAUSTEIN.DP_AUS'), $wi_bm($mq . '_setzen'), $wi_bm($ud . ' setzen'))
+                : sprintf(wi_t('BAUSTEIN.DP_EIN'), $wi_bm($mq), $wi_bm($ud));
+};
+$wi_bs = array(
+    array('B1', 'B1_TYP', array('w', $wi_bv['mqtt_in'][0]), 'B1_PARAM', array(wi_e(wi_t('LOXONE.V_MQTT_IN')), $wi_bm($wi_pre . '_…'), $wi_bm($wi_bv['mqtt_in'][1]), $wi_bm($wi_bv['mqtt_in'][2]), $wi_bm($wi_bv['mqtt_in'][3])), 'B1_EIN', array()),
+    array('B2', 'B2_TYP', array('w', $wi_bv['mqtt_out'][0]), 'B2_PARAM', array(wi_e(wi_t('LOXONE.V_MQTT_OUT')), $wi_bm('…_setzen')), 'B2_EIN', array()),
+    array('B3', 'B3_TYP', array('w', $wi_bv['udp_in'][0]), 'B3_PARAM', array(wi_e(wi_t('LOXONE.V_UDP_IN')), $wi_bm(wi_cfg($wi_cfg, 'multicast_port', '35353')), $wi_bm($wi_bv['udp_in'][1]), $wi_bm($wi_bv['udp_in'][2]), $wi_bm($wi_bv['udp_in'][3]), $wi_bm('<Kennung>;\\v')), 'B3_EIN', array()),
+    array('B4', 'B4_TYP', array('w', $wi_bv['tcp_out'][0]), 'B4_PARAM', array(wi_e(wi_t('LOXONE.V_TCP_OUT')), $wi_bm('tcp://' . $wi_ip . ':' . wi_cfg($wi_cfg, 'input_port', '12005')), $wi_bm('<Kennung>;<v>')), 'B4_EIN', array()),
+    array('B5', 'B5_TYP', array('t', 'B5_NAME'), 'B5_PARAM', array(), 'B5_EIN', array($wi_bpunkt(2, false))),
+    array('B6', 'B6_TYP', array('t', 'B6_NAME'), 'B6_PARAM', array(), 'B6_EIN', array($wi_bm($wi_bv['mqtt_in'][2]), $wi_bm($wi_bv['udp_in'][2]))),
+    array('B7', 'T_NICHT', array('t', 'B7_NAME'), 'P_KEINE', array(), 'B7_EIN', array()),
+    array('B8', 'T_NICHT', array('t', 'B8_NAME'), 'P_KEINE', array(), 'B8_EIN', array($wi_bm($wi_bv['mqtt_in'][1]), $wi_bm($wi_bv['udp_in'][1]))),
+    array('B9', 'T_ODER', array('t', 'B9_NAME'), 'P_KEINE', array(), 'B9_EIN', array()),
+    array('B10', 'T_ODER', array('t', 'B10_NAME'), 'B10_PARAM', array($wi_bpunkt(53, false)), 'B10_EIN', array($wi_bpunkt(1, false))),
+    array('B11', 'B11_TYP', array('t', 'B11_NAME'), 'B11_PARAM', array(), 'B11_EIN', array()),
+    array('B12', 'B12_TYP', array('t', 'B12_NAME'), 'P_KEINE', array(), 'B12_EIN', array($wi_bpunkt(4, false))),
+    array('B13', 'B13_TYP', array('t', 'B13_NAME'), 'B13_PARAM', array(), 'B13_EIN', array($wi_bpunkt(199, true))),
+    array('B14', 'B14_TYP', array('t', 'B14_NAME'), 'B14_PARAM', array(), 'B14_EIN', array($wi_bpunkt(58, true))),
+    array('B15', 'B15_TYP', array('t', 'B15_NAME'), 'B15_PARAM', array(), 'B15_EIN', array($wi_bpunkt(195, false))),
+);
+$wi_bnr = array();
+foreach ($wi_bs as $wi_i => $wi_z) { $wi_bnr[$wi_z[0]] = $wi_i + 1; }
+$wi_bt = function ($schluessel, $arg = array()) use ($wi_bnr) {
+    $t = (string) wi_t('BAUSTEIN.' . $schluessel);
+    $t = $arg ? vsprintf($t, $arg) : $t;
+    return preg_replace_callback('/\{(B\d+)\}/', function ($m) use ($wi_bnr) {
+        return isset($wi_bnr[$m[1]]) ? '#' . $wi_bnr[$m[1]] : $m[0];
+    }, $t);
+}; ?>
 <h2><?= wi_t('BAUSTEIN.H') ?></h2>
 <div class="sm-small"><?= wi_t('BAUSTEIN.EINLEITUNG') ?></div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th style="width:32px;">#</th><th><?= wi_t('BAUSTEIN.TH_TYP') ?></th><th><?= wi_t('BAUSTEIN.TH_NAME') ?></th><th><?= wi_t('BAUSTEIN.TH_PARAM') ?></th><th><?= wi_t('BAUSTEIN.TH_EINGANG') ?></th></tr>
-<?php for ($wi_i = 1; $wi_i <= 8; $wi_i++) { ?>
-<tr><td><?= $wi_i ?></td><td><?= wi_t('BAUSTEIN.B' . $wi_i . '_TYP') ?></td><td><?= wi_t('BAUSTEIN.B' . $wi_i . '_NAME') ?></td><td><?= wi_t('BAUSTEIN.B' . $wi_i . '_PARAM') ?></td><td><?= wi_t('BAUSTEIN.B' . $wi_i . '_EIN') ?></td></tr>
+<?php foreach ($wi_bs as $wi_i => $wi_z) { ?>
+<tr><td><?= $wi_i + 1 ?></td><td><?= $wi_bt($wi_z[1]) ?></td><td><span class="sm-mono"><?= $wi_z[2][0] === 'w' ? wi_e($wi_z[2][1]) : $wi_bt($wi_z[2][1]) ?></span></td><td><?= $wi_bt($wi_z[3], $wi_z[4]) ?></td><td><?= $wi_bt($wi_z[5], $wi_z[6]) ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<?php for ($wi_i = 1; $wi_i <= 4; $wi_i++) { ?>
-<div class="sm-small" style="margin-top:6px;"><?= wi_t('BAUSTEIN.ZU' . $wi_i) ?></div>
-<?php } ?>
+<div class="sm-small" style="margin-top:6px;"><?= $wi_bt('ERLAEUTERUNG') ?></div>
 
 <h2><?= wi_t('ARTEN.H') ?></h2>
 <div class="sm-small"><?= wi_t('ARTEN.HINT') ?></div>
