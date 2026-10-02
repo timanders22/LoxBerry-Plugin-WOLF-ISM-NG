@@ -23,6 +23,30 @@ Die Kette: **Dr. Mugur Dietrich** (Auswertungsmodul, 2017) → **Dominik
 Holland** ([Gagi2k/LoxBerry-Plugin-WolfIsm8](https://github.com/Gagi2k/LoxBerry-Plugin-WolfIsm8),
 Einbettung als LoxBerry-Plugin) → diese Fortführung.
 
+## Version 3.1.5
+
+Durchgang mit vier Prüfern (Befunde: `Pruefung-Durchgang-2026-09-29/WOLF-ISM-NG_BEFUNDE_UND_VERBESSERUNGEN.md`, Entscheidungen 1, 8, 16, 19, 26, 31).
+Gemessen mit ISM8-, Broker- und Gateway-Attrappen unter PHP 7.4, 8.3 und 8.5 sowie im Installer-Prüfstand; nicht an einem echten ISM8, nicht an einer Heizung.
+
+* SG-Ready: Höchstdauer der Anhebung (`sg_laden_max`, ab Werk 6 h); Ausschalten und Deinstallation nehmen einen gesendeten
+  Zwang einmal zurück; `sg/lage` meldet, was an der Heizung gilt; Kreiswechsel stellt den alten Kreis zurück; § 14a-Signal
+  mit Millisekunden-/Zukunftszeitstempel oder unbekanntem Wert gilt als kaputt, `sg/dimmen` −1. Der SG-Merker übersteht
+  ein Update (liegt neben dem Datenordner), ein Zwang wird auch nach einem Update zurückgenommen; ohne Fahrplan sendet
+  das Modul `sg/naechster_start 0` und `sg/naechster_preis -1`.
+* Befehls-Port: nur LoxBerry und Miniserver aus general.json; Befehl bis Zeilenende; gleicher Sollwert binnen 60 s
+  `OK … UNVERAENDERT=1`; Plausibilitätsbereiche nach ISM8i-Anleitung (`ERR BEREICH`); `ERR SENDEN` statt OK.
+* ISM8: Sendeziel nur nach gültigem Telegramm, stille Verbindungen nach 60 s abgeräumt, Keepalive 60/10/3, `online` folgt
+  der Verbindung; Rahmenzerlegung mit Grenzen und Längenprüfung.
+* MQTT: neues Abo nach jeder Neuverbindung, Vollversand nach jeder Verbindung und alle 30 min, Präfixwechsel mit
+  Vollversand und vorgemerkten alten Präfixen, „MQTT aus“ räumt ab und trennt, schreibbare Sollwerte retained,
+  Aufräumen direkt am Broker mit Nachlesen. **Ausgangsvorlagen neu importieren.**
+* Oberfläche: Umleitung nach jedem Absenden (F5 wiederholt nichts), bei einer Beanstandung wird nichts gespeichert und die
+  Eingaben kommen markiert zurück, Miniserver mit Rechnernamen aufgelöst oder beanstandet, Sicherung warnt, neue
+  Prüfzeilen, Ausgeschaltetes grau, scharfe Knöpfe unter „Schalten“.
+* Installer: Neuinstallation legt liegengebliebene Zweitschriften nach `.alt`, eigene Zweitschrift der Störcodetabelle,
+  Startsperre gegen doppelte Watchdogs, `wolf_server` als root steigt zu loxberry ab.
+* Kern (Dr. Mugur Dietrich): Änderungen in NOTICE vermerkt; Urhebervermerk unverändert.
+
 ## Version 3.1.4 — `online` nach jeder Neuverbindung, Deinstallation räumt den Broker ab
 
 Alles in WSL Ubuntu gemessen (Prüfstand `Pruefung-WOLF-ISM-NG-3.1.4`,

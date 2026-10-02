@@ -91,6 +91,21 @@ if [ "$SELF" != "$(readlink -f "$WURZEL/bin/plugins/$PNAME" 2>/dev/null)" ] \
     [ "${1:-}" = "status" ] && exit 4
     exit 1
 fi
+# ---------------------------------------------------------------------------
+# I4 (Durchgang 02.10.2026, Regeln/06 "das Startskript steigt selbst zu
+# loxberry ab"): als root aufgerufen - etwa bei der Fehlersuche ueber su - -
+# startete bis 3.1.5 ein Watchdog als root. Den sahen status, stop, Waechter
+# und uninstall nicht (sie suchen Prozesse des Dienstbenutzers), er hielt den
+# ISM8-Port nach der Deinstallation weiter, und der Waechter startete einen
+# zweiten (Bericht installer, Befund I4). Jetzt fuehrt das Skript sich selbst
+# als loxberry aus, mit der geprueften Wurzel und dem Ordner.
+# ---------------------------------------------------------------------------
+if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+    exec su -s /bin/bash loxberry -c "$(printf '%q ' env "LBHOMEDIR=$WURZEL" \
+        "LBPPLUGINDIR=$PNAME" "WI_START_TROTZ_MARKE=${WI_START_TROTZ_MARKE:-0}" \
+        "$SELF/wolf_server" "$@")" < /dev/null
+fi
+
 # Die Pfade DER ANLAGE. Installiert ist das derselbe Ordner wie SELF.
 BINPATH="$WURZEL/bin/plugins/$PNAME"
 # Der Watchdog liest daraus seine Protokollbibliothek.
@@ -235,6 +250,33 @@ wolf_beenden() {
     done
     return 0
 }
+# ---------------------------------------------------------------------------
+# I2 (Durchgang 02.10.2026): Startsperre.
+#
+# Zwei Waechterlaeufe in derselben Sekunde (Cron holt nach einem Uhrsprung
+# Minuten nach, am Geraet am 28.09.2026 belegt) fanden beide "laeuft nicht"
+# und starteten je einen Watchdog - in WSL 10 von 10 Runden mit 2 Watchdogs
+# (Bericht installer, Befund I2). Gesperrt wird auf dieses Skript selbst
+# (flock auf Deskriptor 9), mit Warten bis 15 s: der zweite Aufrufer wartet,
+# bis der erste gestartet und nachgesehen hat, und fragt DANACH, ob schon
+# einer laeuft. Der Watchdog erbt den Deskriptor NICHT (9>&- beim Start),
+# sonst hielte er die Sperre, solange er laeuft. Ohne flock (kein
+# util-linux) bleibt es beim Verhalten bis 3.1.5. Bauform: Bewaesserung
+# 0.9.35 (dienst.sh, startsperre_nehmen).
+# ---------------------------------------------------------------------------
+WI_SPERRE_GEHALTEN=0
+startsperre_nehmen() {
+    [ "$WI_SPERRE_GEHALTEN" = "1" ] && return 0
+    command -v flock >/dev/null 2>&1 || return 0
+    [ -r "$SELF/wolf_server" ] || return 0
+    exec 9<"$SELF/wolf_server"
+    if flock -w 15 9; then
+        WI_SPERRE_GEHALTEN=1
+        return 0
+    fi
+    return 1
+}
+
 # Carry out specific functions when asked to by the system
 case "$1" in
   'start')
@@ -245,7 +287,10 @@ case "$1" in
     # davon startet ein eigenes Auswertungsmodul auf demselben ISM8-Port.
     # "start" rufen daemon/daemon beim Systemstart und cron/cron.05min; der
     # Waechter fragt vorher selbst nach, der Systemstart nicht.
-    if upgrade_laeuft; then
+    if ! startsperre_nehmen; then
+        echo "Wolf ISM8i: ein anderer Start dieses Plugins laeuft seit ueber 15 Sekunden - nichts gestartet."
+        RETVAL=0
+    elif upgrade_laeuft; then
         echo "Wolf ISM8i: eine Aktualisierung dieses Plugins laeuft - nicht gestartet."
         RETVAL=0
     elif wolf_laeuft "${BINPATH}/wolf_watchdog.sh"; then
@@ -253,7 +298,8 @@ case "$1" in
         RETVAL=0
     else
         echo "Starting Wolf ISM8i server"
-        ${BINPATH}/wolf_watchdog.sh &
+        # 9>&-: der Watchdog erbt die Startsperre nicht (I2).
+        ${BINPATH}/wolf_watchdog.sh 9>&- &
         # RETVAL=$? unmittelbar nach "&" misst den Hintergrundstart, nicht
         # den Lauf: "false &" ergibt 0, "/gibtesnicht &" ebenso. Der
         # stop-Zweig wurde deshalb schon in 3.0.8 auf Wirkungsmessung
@@ -291,7 +337,10 @@ case "$1" in
     # Dienst mit der mitgelieferten Vorgabe-Konfiguration - anderer
     # ISM8-Port, anderes Themenpraefix (Fall B3). postupgrade.sh setzt
     # WI_START_TROTZ_MARKE=1 und kommt damit durch.
-    if upgrade_laeuft; then
+    if ! startsperre_nehmen; then
+        echo "Wolf ISM8i: ein anderer Start dieses Plugins laeuft seit ueber 15 Sekunden - nicht neu gestartet."
+        RETVAL=0
+    elif upgrade_laeuft; then
         echo "Wolf ISM8i: eine Aktualisierung dieses Plugins laeuft - nicht neu gestartet."
         RETVAL=0
     else
@@ -300,7 +349,7 @@ case "$1" in
         # Hier stand ein RETVAL=$? nach wolf_beenden - eine tote
         # Zuweisung, drei Zeilen spaeter ueberschrieben.
         sleep 1
-        ${BINPATH}/wolf_watchdog.sh &
+        ${BINPATH}/wolf_watchdog.sh 9>&- &
         sleep 1
         if wolf_laeuft "${BINPATH}/wolf_watchdog.sh"; then
             RETVAL=0

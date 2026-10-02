@@ -113,6 +113,68 @@ if [ -z "$NETZ_SOLL" ]; then
     echo "<INFO> Die mitgelieferte Vorgabe war nicht lesbar - es wird nur"
     echo "<INFO> auf fehlende oder leere Konfiguration geprueft."
 fi
+# ---------------------------------------------------------------------------
+# I1 (Durchgang 02.10.2026, Entscheidung 1): zurueckgespielt wird NUR bei
+# einer Aktualisierung, erkennbar an der Marke aus preupgrade.sh
+# (data/plugins/<ordner>.upgrade_laeuft) - ohne Altersvergleich; die
+# Stunde gilt nur fuer die Startsperre des Dienstes. Fehlt sie, ist dies eine
+# NEUINSTALLATION: liegengebliebene Zweitschriften wandern nach <name>.alt,
+# einmal <WARNING> mit den Pfaden, nichts wird zurueckgespielt. Bis 3.1.5
+# lief eine "saubere" Neuinstallation binnen fuenf Minuten mit alten Ports,
+# altem Praefix und alter Stoercodewahl los und meldete das als Erfolg
+# (Bericht installer, Befund I1; Kette, Bauart F). Reste entstehen etwa nach
+# der Deinstallation einer Fassung bis 3.0.10. Die .alt liest nichts mehr;
+# uninstall raeumt sie ab.
+# ---------------------------------------------------------------------------
+WI_MARKE="$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_laeuft"
+if [ ! -f "$WI_MARKE" ]; then
+    WI_ALT=""
+    for WI_D in wolf_ism8i.conf wolf_stoercodes.csv; do
+        WI_Z="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.$WI_D"
+        [ -f "$WI_Z" ] || continue
+        if mv -f "$WI_Z" "$WI_Z.alt" 2>/dev/null; then
+            WI_ALT="$WI_ALT $WI_Z.alt"
+        else
+            WI_ALT="$WI_ALT $WI_Z (liess sich nicht verschieben)"
+        fi
+    done
+    # Nachtrag 02.10.2026: der SG-Bestand (Merker) neben dem Datenordner ist ein
+    # Bestand im Sinne von Entscheidung 1 und geht ebenfalls nach .alt.
+    WI_B="$NETZ_BASE/data/plugins/$NETZ_PDIR.bestand"
+    if [ -d "$WI_B" ]; then
+        case "$WI_B" in
+            */data/plugins/?*.bestand) [ -d "$WI_B.alt" ] && rm -rf "${WI_B:?}.alt" ;;
+        esac
+        if mv "$WI_B" "$WI_B.alt" 2>/dev/null; then
+            WI_ALT="$WI_ALT $WI_B.alt"
+        else
+            WI_ALT="$WI_ALT $WI_B (liess sich nicht verschieben)"
+        fi
+    fi
+    if [ -n "$WI_ALT" ]; then
+        echo "<WARNING> Neuinstallation: liegengebliebene Zweitschriften und Bestaende wurden NICHT zurueckgespielt, sondern beiseitegelegt:$WI_ALT"
+    fi
+    exit 0
+fi
+
 netz_zurueck "wolf_ism8i.conf" "$NETZ_SOLL"
+
+# ---------------------------------------------------------------------------
+# I3 (Durchgang 02.10.2026): die eigene Stoercodetabelle hat eine eigene
+# Zweitschrift (preupgrade.sh). Zurueckgespielt wird sie nur bei liegender
+# Marke (oben) und nur, wenn das Ziel fehlt - unabhaengig davon, ob die
+# Konfiguration zurueckkam. Bis 3.1.5 hing sie allein an postupgrade.sh; lief
+# das nicht durch, war die von Hand gepflegte Tabelle fort (Befund I3, F3b).
+# ---------------------------------------------------------------------------
+WI_CSV="$NETZ_CFG/wolf_stoercodes.csv"
+WI_CSV_Z="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_stoercodes.csv"
+if [ -f "$WI_CSV_Z" ] && [ ! -f "$WI_CSV" ]; then
+    if cp -p "$WI_CSV_Z" "$WI_CSV" 2>/dev/null && cmp -s "$WI_CSV_Z" "$WI_CSV"; then
+        echo "<OK> wolf_stoercodes.csv aus der Zweitschrift wiederhergestellt."
+    else
+        echo "<WARNING> wolf_stoercodes.csv liess sich nicht zurueckspielen. Die Sicherung"
+        echo "<WARNING> liegt unter $WI_CSV_Z und kann von Hand kopiert werden."
+    fi
+fi
 
 exit 0

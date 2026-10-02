@@ -95,6 +95,107 @@ $wi_saved = false;
 $wi_error = '';
 $wi_hinweis = '';
 $wi_beanstandungen = array();
+/* Durchgang 02.10.2026: die dritte Art (Regeln/04) - eine Lage, die der
+ * Bediener lesen soll, die aber weder Erfolg noch Beanstandung ist (gelb). */
+$wi_hinweise = array();
+$wi_test_titel = '';
+$wi_test_text = '';
+$wi_test_tab = '';
+$wi_sg_probe = null;
+/* X-2 (Regeln/04, Bauliste O3): nach einer Beanstandung reisen die Eingaben
+ * des EINEN Formulars mit der Einmalmeldung zurueck.
+ * array('formular' => Name, 'werte' => Feld => Wert, 'falsch' => Felder) */
+$wi_eingaben = array();
+$wi_post = isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST';
+
+/* ============ Einmalmeldung (PRG, Bauliste O1) ============
+ *
+ * Bis 3.1.5 antwortete jeder POST mit 200 und der fertigen Seite (Bericht
+ * oberflaeche, O1: "grep -c Location index.php" ergab 0). F5 schickte den
+ * letzten POST noch einmal - auch "an die Heizung schreiben", "Server neu
+ * starten", "Retained-Themen wirklich loeschen" und "Sicherung
+ * zurueckspielen". Jetzt endet jeder POST mit 303 auf index.php?tab=<reiter>;
+ * das Ergebnis reist in data/plugins/<ordner>/einmalmeldung.json (0600,
+ * hoechstens 120 s alt, NUR beim GET gelesen und dabei geloescht). Die
+ * Downloads (Vorlage, Sicherung) liefern weiter unmittelbar ihre Datei. */
+$wi_flash_datei = wi_einmal_datei();
+$wi_flash_tab = '';
+if (!$wi_post && is_file($wi_flash_datei)) {
+    $wi_flash = json_decode((string) @file_get_contents($wi_flash_datei), true);
+    @unlink($wi_flash_datei);
+    $wi_flash_alter = (is_array($wi_flash) && isset($wi_flash['ts'])) ? time() - (int) $wi_flash['ts'] : 9999;
+    if (is_array($wi_flash) && $wi_flash_alter >= -5 && $wi_flash_alter <= 120) {
+        $wi_saved = !empty($wi_flash['saved']);
+        foreach (array('error', 'hinweis', 'test_titel', 'test_text', 'test_tab') as $wi_fk) {
+            if (isset($wi_flash[$wi_fk]) && is_string($wi_flash[$wi_fk])) {
+                ${'wi_' . $wi_fk} = $wi_flash[$wi_fk];
+            }
+        }
+        foreach (array('beanstandungen', 'hinweise') as $wi_fk) {
+            if (isset($wi_flash[$wi_fk]) && is_array($wi_flash[$wi_fk])) {
+                ${'wi_' . $wi_fk} = array_values(array_filter($wi_flash[$wi_fk], 'is_string'));
+            }
+        }
+        if (isset($wi_flash['sg_probe']) && is_array($wi_flash['sg_probe'])) {
+            $wi_sg_probe = $wi_flash['sg_probe'];
+        }
+        if (isset($wi_flash['eingaben']) && is_array($wi_flash['eingaben'])) {
+            $wi_eingaben = $wi_flash['eingaben'];
+        }
+        if (isset($wi_flash['tab']) && is_string($wi_flash['tab'])) {
+            $wi_flash_tab = $wi_flash['tab'];
+        }
+    }
+}
+
+/* ---- X-2: Werte und Markierung nach einer Beanstandung (Regeln/04) ----
+ * Bauform tb_fa/tb_fw/tb_fh/tb_fm (Spotpreis Tibber, Durchgang 01.10.2026). */
+/** Ist dieses Formular das beanstandete? */
+function wi_fa($formular)
+{
+    global $wi_eingaben;
+    return is_array($wi_eingaben) && isset($wi_eingaben['formular'])
+        && $wi_eingaben['formular'] === $formular;
+}
+/** Wert eines Feldes: nach einer Beanstandung die Eingabe, sonst der gespeicherte. */
+function wi_fw($formular, $feld, $gespeichert)
+{
+    global $wi_eingaben;
+    if (wi_fa($formular) && isset($wi_eingaben['werte'][$feld])
+        && is_string($wi_eingaben['werte'][$feld])) {
+        return $wi_eingaben['werte'][$feld];
+    }
+    return is_scalar($gespeichert) ? (string) $gespeichert : '';
+}
+/** Haken: nach einer Beanstandung so, wie er abgeschickt wurde. */
+function wi_fh($formular, $feld, $gespeichert)
+{
+    global $wi_eingaben;
+    if (!wi_fa($formular)) {
+        return (string) $gespeichert === '1';
+    }
+    return isset($wi_eingaben['werte'][$feld]) && $wi_eingaben['werte'][$feld] === '1';
+}
+/** Markierung eines beanstandeten Feldes (Attribute, schon maskiert). */
+function wi_fm($feld)
+{
+    global $wi_eingaben;
+    return (is_array($wi_eingaben) && isset($wi_eingaben['falsch']) && is_array($wi_eingaben['falsch'])
+            && in_array($feld, $wi_eingaben['falsch'], true))
+        ? ' class="sm-beanstandet" aria-invalid="true"' : '';
+}
+/** Die abgeschickten Felder eines Formulars als Zeichenketten (fuer X-2). */
+function wi_eingaben_von($felder, $haken)
+{
+    $w = array();
+    foreach ($felder as $f) {
+        $w[$f] = (isset($_POST[$f]) && is_string($_POST[$f])) ? $_POST[$f] : '';
+    }
+    foreach ($haken as $f) {
+        $w[$f] = isset($_POST[$f]) ? '1' : '0';
+    }
+    return $w;
+}
 
 /* ============ EIN Wachposten vor allen Handlern ============
  *
@@ -103,15 +204,13 @@ $wi_beanstandungen = array();
  * Verglichen wird mit hash_equals - ein einfaches == liesse sich ueber
  * die Antwortzeit Zeichen fuer Zeichen erraten.
  */
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($wi_post) {
     $wi_fmt_ein = isset($_POST['fmt']) && is_string($_POST['fmt']) ? $_POST['fmt'] : '';
     if (!hash_equals(wi_formkey(), $wi_fmt_ein)) {
         $wi_error = wi_t('MELDUNG.FREMDES_FORMULAR');
         // Den aktiven Reiter behalten - der Anwender soll die Meldung dort
-        // sehen, wo er war. Bis 3.0.10 sprang die Seite nach jedem
-        // abgewiesenen Formular auf Einstellungen, und die Meldung stand in
-        // einem Reiter, in dem er gar nichts getan hatte. Der Regelfall ist
-        // keine fremde Seite, sondern eine lange offen gelegene eigene.
+        // sehen, wo er war. Der Regelfall ist keine fremde Seite, sondern
+        // eine lange offen gelegene eigene.
         $wi_behalten = isset($_POST['activetab']) && is_string($_POST['activetab'])
             ? $_POST['activetab'] : null;
         $_POST = array();
@@ -122,36 +221,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Der Reiter kommt aus einem abgesendeten Formular (activetab) oder aus der
-// Adresse (?tab=...). Letzteres brauchen die Reiter, seit sie echte Verweise
-// sind - siehe die Reiterleiste weiter unten.
-$wi_wunsch = isset($_POST['activetab']) ? (string) $_POST['activetab']
-    : (isset($_GET['tab']) ? 'tab-' . (string) $_GET['tab'] : '');
+// Der Reiter kommt aus einem abgesendeten Formular (activetab), aus der
+// Einmalmeldung oder aus der Adresse (?tab=...).
+$wi_wunsch = isset($_POST['activetab']) && is_string($_POST['activetab']) ? (string) $_POST['activetab']
+    : ($wi_flash_tab !== '' ? $wi_flash_tab
+    : (isset($_GET['tab']) && is_string($_GET['tab']) ? 'tab-' . (string) $_GET['tab'] : ''));
 $wi_tab = preg_match('/^tab-(settings|mqtt|sg|loxone|test|log)$/', $wi_wunsch)
     ? $wi_wunsch : 'tab-settings';
 
 /* ============ Loxone-Vorlage herunterladen ============ */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['download'])) {
-    $art = (string) $_POST['download'];
-    $geraete = isset($_POST['geraete']) && is_array($_POST['geraete']) ? $_POST['geraete'] : array();
+if ($wi_post && isset($_POST['download'])) {
+    $art = is_string($_POST['download']) ? (string) $_POST['download'] : '';
+    $geraete = isset($_POST['geraete']) && is_array($_POST['geraete'])
+        ? array_values(array_filter($_POST['geraete'], 'is_string')) : array();
     $nurgesehen = isset($_POST['nurgesehen']) ? wi_gesehen() : null;
+    $wi_tab = 'tab-loxone';
     if (!$geraete) {
         $wi_error = wi_t('MELDUNG.KEIN_GERAET');
-        $wi_tab = 'tab-loxone';
     } else {
         list($name, $inhalt, $anzahl) = wi_vorlage($art, wi_config_read(), $geraete, $nurgesehen);
         if ($name === '') {
             $wi_error = wi_t('MELDUNG.UNBEKANNTE_ART');
-            $wi_tab = 'tab-loxone';
         } elseif ($art === 'mqtt_out' && !wi_mqtt_udpinport()) {
             // Ohne UDP-Eingangsport des Gateways entstuende die Adresse
             // /dev/udp/<ip>/0. Ein virtueller Ausgang auf Port 0 sendet
             // nichts, und Loxone meldet dazu nichts.
             $wi_error = wi_t('MELDUNG.KEIN_UDPIN_VORLAGE');
-            $wi_tab = 'tab-loxone';
         } elseif ($anzahl < 1) {
             $wi_error = wi_t('MELDUNG.LEERE_VORLAGE');
-            $wi_tab = 'tab-loxone';
         } else {
             header('Content-Type: application/x-download');
             header('Content-Disposition: attachment; filename="' . $name . '"');
@@ -162,9 +259,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['download'])) {
     }
 }
 
-/* ============ Einstellungen sichern (V17) ============ */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sichern'])) {
-    $txt = wi_konfig_text(wi_config_read());
+/* ============ Einstellungen sichern (V17, X-3) ============
+ *
+ * X-3 (Durchgang 02.10.2026, Bauliste O6): die Sicherung geht immer
+ * vollstaendig hinaus. Wuerde das Zurueckspielen sie abweisen, steht in der
+ * Datei eine Kommentarzeile "# _warnung: ..." mit den SCHLUESSELNAMEN (nie
+ * den Werten), und am Knopf steht eine gelbe Warnung (Bauform EVCC Nr. 13).
+ * Bis 3.1.5 merkte man erst auf dem neuen LoxBerry, dass sie wertlos war. */
+if ($wi_post && isset($_POST['sichern'])) {
+    $wi_scfg = wi_config_read();
+    $txt = wi_konfig_text($wi_scfg);
+    $wi_swarn = wi_sicherung_maengel($wi_scfg);
+    if ($wi_swarn) {
+        $txt = '# _warnung: Diese Einstellungen wuerden beim Zurueckspielen abgewiesen: '
+             . implode(', ', $wi_swarn) . "\n" . $txt;
+    }
     header('Content-Type: application/x-download');
     header('Content-Disposition: attachment; filename="wolf_ism8i_einstellungen.txt"');
     header('Content-Length: ' . strlen($txt));
@@ -173,16 +282,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sichern'])) {
 }
 
 /* ============ Einstellungen zurueckspielen (V17) ============ */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['laden'])) {
+if ($wi_post && isset($_POST['laden'])) {
     $wi_tab = 'tab-settings';
-    if (!isset($_FILES['sicherung']) || !is_array($_FILES['sicherung'])
-        || !isset($_FILES['sicherung']['tmp_name'])
-        || !@is_uploaded_file($_FILES['sicherung']['tmp_name'])) {
+    /* O8 (Durchgang 02.10.2026): tmp_name muss eine Zeichenkette sein. Ein
+     * Feld "sicherung[]" ergab bis 3.1.5 unter PHP 8 einen TypeError in
+     * is_uploaded_file() und HTTP 500 (Bericht oberflaeche, O8). */
+    $wi_up = isset($_FILES['sicherung']) && is_array($_FILES['sicherung']) ? $_FILES['sicherung'] : null;
+    if ($wi_up === null || !isset($wi_up['tmp_name']) || !is_string($wi_up['tmp_name'])
+        || is_array($wi_up['tmp_name']) || !isset($wi_up['size']) || !is_scalar($wi_up['size'])
+        || !@is_uploaded_file($wi_up['tmp_name'])) {
         $wi_error = wi_t('MELDUNG.SICH_KEINE_DATEI');
-    } elseif ((int) $_FILES['sicherung']['size'] > 65536) {
+    } elseif ((int) $wi_up['size'] > 65536) {
         $wi_error = wi_t('MELDUNG.SICH_ZU_GROSS');
     } else {
-        $roh = (string) @file_get_contents($_FILES['sicherung']['tmp_name']);
+        $roh = (string) @file_get_contents($wi_up['tmp_name']);
         list($neu, $mangel) = wi_konfig_einlesen($roh);
         if ($neu === null) {
             // Eine halb gueltige Datei ueberschreibt NICHTS.
@@ -199,31 +312,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['laden'])) {
 
 /* ============ Speichern: SG-Ready - eigener Handler (V24) ============
  *
- * Wie beim MQTT-Reiter ein EIGENES Formular mit eigenem Handler. Der
- * Einstellungs-Handler fasst diese Schluessel nicht an; taete er es, setzte
- * jedes Speichern dort die beiden Schalter zurueck.
+ * Wie beim MQTT-Reiter ein EIGENES Formular mit eigenem Handler. Jeder Wert
+ * laeuft durch wi_wert_taugt() - dieselbe Positivliste, die auch eine
+ * zurueckgespielte Sicherung prueft. Beanstandet wird gesammelt.
  *
- * Jeder Wert laeuft durch wi_wert_taugt() - dieselbe Positivliste, die auch
- * eine zurueckgespielte Sicherung prueft. Beanstandet wird gesammelt, nicht
- * die erste Meldung; und was nicht durchkommt, behaelt den BISHERIGEN Wert,
- * nicht die Vorgabe.
+ * O2/O4 (Durchgang 02.10.2026, Entscheidung 16): bei EINER Beanstandung
+ * wird NICHTS gespeichert - auch nicht bei den beiden Querpruefungen. Bis
+ * 3.1.5 stand dann "Nicht uebernommen", und gespeichert war alles (Bericht
+ * oberflaeche, O4).
  */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_sg'])) {
+if ($wi_post && isset($_POST['save_sg'])) {
     $wi_tab = 'tab-sg';
     $wi_vorher_sg = wi_config_read();
     $neu = $wi_vorher_sg;
+    $wi_falsch = array();
+    $wi_sg_felder = array('sg_quelle', 'sg_awattar_ordner', 'sg_stunden', 'sg_block',
+                          'sg_horizont', 'sg_kreis', 'sg_ww_normal', 'sg_ww_laden',
+                          'sg_korrektur', 'sg_laden_max', 'sg_14a_modus', 'sg_14a_alter');
 
     $neu['sg_ein']    = isset($_POST['sg_ein']) ? '1' : '0';
     $neu['sg_senden'] = isset($_POST['sg_senden']) ? '1' : '0';
     $neu['sg_14a']    = isset($_POST['sg_14a']) ? '1' : '0';
 
-    foreach (array('sg_quelle', 'sg_awattar_ordner', 'sg_stunden', 'sg_block',
-                   'sg_horizont', 'sg_kreis', 'sg_ww_normal', 'sg_ww_laden',
-                   'sg_korrektur', 'sg_14a_modus', 'sg_14a_alter') as $wi_k) {
+    foreach ($wi_sg_felder as $wi_k) {
         if (!isset($_POST[$wi_k])) {
             continue;
         }
-        $wi_v = trim((string) $_POST[$wi_k]);
+        $wi_v = trim(is_string($_POST[$wi_k]) ? $_POST[$wi_k] : '');
         $wi_alt = wi_cfg($neu, $wi_k, wi_defaults()[$wi_k]);
         if ($wi_v === '') {
             continue;   // Leeres Feld loescht nichts.
@@ -233,45 +348,65 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_sg'])) {
         } else {
             $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.SG_WERT'),
                 wi_e($wi_k), wi_e($wi_v), wi_e((string) $wi_alt));
+            $wi_falsch[] = $wi_k;
         }
     }
 
-    /* Ein Warmwassersollwert im Ladefenster UNTER dem Normalwert waere kein
-     * Ladefenster, sondern eine Absenkung. Gemeldet, nicht zurechtgebogen. */
-    if ((float) wi_cfg($neu, 'sg_ww_laden', '55') < (float) wi_cfg($neu, 'sg_ww_normal', '48')) {
-        $wi_beanstandungen[] = wi_t('MELDUNG.SG_SOLL_VERDREHT');
-    }
-    /* Mehr Stunden als der Horizont hergibt ist ein Rechenfehler, kein Wunsch. */
-    if ((int) wi_cfg($neu, 'sg_stunden', '4') > (int) wi_cfg($neu, 'sg_horizont', '24')) {
-        $wi_beanstandungen[] = wi_t('MELDUNG.SG_STUNDEN');
-    }
-    /* Das Schreiben laesst sich nicht einschalten, solange die Rechnung aus
-     * ist - sonst stuende ein scharfer Schalter an einem stillen Modul. */
-    if ($neu['sg_senden'] === '1' && $neu['sg_ein'] !== '1') {
+    /* Ausschalten nimmt das Schreiben mit (sichere Richtung, Bauliste
+     * "Festlegungen"): wer nur den ersten Haken herausnimmt, schaltet beides
+     * aus, und die Meldung sagt das. Abgewiesen wird nur das EINSCHALTEN des
+     * Schreibens ohne das Modul. */
+    if ($neu['sg_senden'] === '1' && $neu['sg_ein'] !== '1'
+        && wi_cfg($wi_vorher_sg, 'sg_senden', '0') === '1') {
         $neu['sg_senden'] = '0';
-        $wi_beanstandungen[] = wi_t('MELDUNG.SG_SENDEN_OHNE_EIN');
+        $wi_hinweise[] = wi_t('MELDUNG.SG_SENDEN_MIT_AUS');
+    }
+    if (!$wi_falsch) {
+        foreach (wi_sg_querpruefung($neu) as $wi_q) {
+            $wi_beanstandungen[] = $wi_q[1];
+            $wi_falsch[] = $wi_q[0];
+        }
     }
 
-    if (wi_config_write($neu)) {
+    if ($wi_beanstandungen) {
+        $wi_eingaben = array('formular' => 'sg',
+            'werte' => wi_eingaben_von($wi_sg_felder, array('sg_ein', 'sg_senden', 'sg_14a')),
+            'falsch' => array_values(array_unique($wi_falsch)));
+    } elseif (wi_config_write($neu)) {
         $wi_saved = true;
         /* Der Dienst braucht dafuer KEINEN Neustart: er liest diese
          * Schluessel gar nicht - bin/wolf_sg.php tut es bei jedem Lauf neu. */
         $wi_hinweis = wi_t('MELDUNG.SG_GESPEICHERT');
+        /* C2 (Durchgang 02.10.2026): wird das Schreiben ausgeschaltet, nimmt
+         * die Oberflaeche einen gesendeten Zwang SOFORT zurueck - nicht erst
+         * der naechste Waechterlauf. Gelingt es nicht, versucht es der. */
+        $wi_war_scharf = wi_cfg($wi_vorher_sg, 'sg_ein', '0') === '1'
+                      && wi_cfg($wi_vorher_sg, 'sg_senden', '0') === '1';
+        $wi_ist_scharf = $neu['sg_ein'] === '1' && $neu['sg_senden'] === '1';
+        if ($wi_war_scharf && !$wi_ist_scharf) {
+            list($wi_zrc, $wi_zm) = wi_sg_zuruecknehmen($neu);
+            $wi_zl = end($wi_zm);
+            $wi_hinweise[] = vsprintf(wi_t($wi_zl[0]), $wi_zl[1]);
+        }
+        if (wi_cfg($wi_vorher_sg, 'sg_ein', '0') === '1' && $neu['sg_ein'] !== '1') {
+            $wi_mn = wi_sg_mqtt_aus($neu, false);
+            if ($wi_mn) {
+                $wi_hinweise[] = wi_t('MELDUNG.SG_MQTT_AUS');
+            }
+        }
     } else {
         $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e($wi_p['config']));
     }
 }
 
 /* ============ Trockenlauf des SG-Moduls ============ */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['sg_probe'])) {
+if ($wi_post && isset($_POST['sg_probe'])) {
     $wi_tab = 'tab-sg';
     $wi_sg_probe = wi_sg_stellen(wi_config_read(), false);
 }
 
 /* ============ Test-Aktionen ============ */
-$wi_test_titel = '';
-$wi_test_text = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test'])) {
+if ($wi_post && isset($_POST['test']) && is_string($_POST['test'])) {
     $wi_was = (string) $_POST['test'];
     list($wi_test_titel, $wi_test_text) = wi_test_ausfuehren($wi_was);
     if (strpos($wi_was, 'aufraeumen') === 0) {
@@ -281,17 +416,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test'])) {
     } else {
         $wi_tab = 'tab-test';
     }
+    $wi_test_tab = $wi_tab;
+    if ($wi_was === 'schreibprobe' || $wi_was === 'schreibernst') {
+        // Die Auswahl bleibt nach der Umleitung stehen.
+        $wi_eingaben = array('formular' => 'schreibprobe',
+            'werte' => wi_eingaben_von(array('sp_id', 'sp_wert'), array()), 'falsch' => array());
+    }
 }
 
-/* ============ Speichern: Einstellungen - OHNE MQTT ============ */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
+/* ============ Speichern: Einstellungen - OHNE MQTT ============
+ *
+ * O2 (Durchgang 02.10.2026, Entscheidung 16): bei einer Beanstandung wird
+ * NICHTS gespeichert, die Eingaben kommen markiert zurueck (X-2). Bis 3.1.5
+ * standen "Gespeichert." und "Nicht uebernommen" zugleich da, und die
+ * gueltigen Felder waren gespeichert (Bericht oberflaeche, O2/O3). */
+if ($wi_post && isset($_POST['save'])) {
+    $wi_tab = 'tab-settings';
     $wi_vorher = wi_config_read();
     $neu = $wi_vorher;
+    $wi_falsch = array();
 
     // Fehlt ein Feld, gilt der BESTEHENDE Wert - nicht die Vorgabe.
     // Und ein unzulaessiger Wert wird BEANSTANDET statt zurechtgebogen.
-    $port = function ($schluessel, $alt, $feld) use (&$wi_beanstandungen) {
-        if (!isset($_POST[$schluessel])) {
+    $port = function ($schluessel, $alt, $feld) use (&$wi_beanstandungen, &$wi_falsch) {
+        if (!isset($_POST[$schluessel]) || !is_string($_POST[$schluessel])) {
             return (string) $alt;
         }
         $t = trim((string) $_POST[$schluessel]);
@@ -301,12 +449,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         if (!ctype_digit($t) || (int) $t < 1 || (int) $t > 65535) {
             $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.PORT_UNGUELTIG'),
                 wi_e($feld), wi_e($t), wi_e((string) $alt));
+            $wi_falsch[] = $schluessel;
             return (string) $alt;
         }
         return (string) (int) $t;
     };
-    $zahl = function ($schluessel, $alt, $feld, $min, $max) use (&$wi_beanstandungen) {
-        if (!isset($_POST[$schluessel])) {
+    $zahl = function ($schluessel, $alt, $feld, $min, $max) use (&$wi_beanstandungen, &$wi_falsch) {
+        if (!isset($_POST[$schluessel]) || !is_string($_POST[$schluessel])) {
             return (string) $alt;
         }
         $t = trim((string) $_POST[$schluessel]);
@@ -316,6 +465,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
         if (!ctype_digit($t) || (int) $t < $min || (int) $t > $max) {
             $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.ZAHL_UNGUELTIG'),
                 wi_e($feld), wi_e($t), (int) $min, (int) $max, wi_e((string) $alt));
+            $wi_falsch[] = $schluessel;
             return (string) $alt;
         }
         return (string) (int) $t;
@@ -332,35 +482,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $neu['dp_log']      = isset($_POST['dp_log']) ? '1' : '0';
     $neu['pull_on_write'] = isset($_POST['pull_on_write']) ? '1' : '0';
 
-    // V18: das Ausgabeformat ist ein Auswahlfeld. Bis 3.0.7 war es ein Haken,
-    // der nur zwischen 'data' und 'none' umschalten konnte - wer 'fhem' oder
-    // 'csv' in der Datei stehen hatte, verlor es beim ERSTEN Speichern, ohne
-    // dass die Oberflaeche es vorher auch nur angezeigt haette.
+    // V18: das Ausgabeformat ist ein Auswahlfeld.
     $wi_alt_out = wi_cfg($neu, 'output', 'none');
-    $out = isset($_POST['output']) ? (string) $_POST['output'] : $wi_alt_out;
+    $out = isset($_POST['output']) && is_string($_POST['output']) ? (string) $_POST['output'] : $wi_alt_out;
     if (in_array($out, array('none', 'data', 'csv', 'fhem'), true)) {
         $neu['output'] = $out;
     } else {
         $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.OUT_UNGUELTIG'), wi_e($out), wi_e($wi_alt_out));
-        $neu['output'] = $wi_alt_out;
+        $wi_falsch[] = 'output';
     }
 
     $wi_alt_fw = wi_cfg($neu, 'fw_version', '1.8');
-    $fw = isset($_POST['fw_version']) ? (string) $_POST['fw_version'] : $wi_alt_fw;
+    $fw = isset($_POST['fw_version']) && is_string($_POST['fw_version']) ? (string) $_POST['fw_version'] : $wi_alt_fw;
     if (in_array($fw, array('1.4', '1.5', '1.7', '1.8', '1.9'), true)) {
         $neu['fw_version'] = $fw;
     } else {
         $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.FW_UNGUELTIG'), wi_e($fw), wi_e($wi_alt_fw));
-        $neu['fw_version'] = $wi_alt_fw;
+        $wi_falsch[] = 'fw_version';
     }
 
     $wi_alt_to = wi_cfg($neu, 'online_timeout', '-1');
-    $to = trim((string) (isset($_POST['online_timeout']) ? $_POST['online_timeout'] : $wi_alt_to));
+    $to = trim((string) (isset($_POST['online_timeout']) && is_string($_POST['online_timeout'])
+        ? $_POST['online_timeout'] : $wi_alt_to));
     if (preg_match('/^(-1|[0-9]+)$/', $to)) {
         $neu['online_timeout'] = $to;
     } else {
         $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.TIMEOUT_UNGUELTIG'), wi_e($to), wi_e($wi_alt_to));
-        $neu['online_timeout'] = $wi_alt_to;
+        $wi_falsch[] = 'online_timeout';
     }
 
     $neu['herzschlag'] = $zahl('herzschlag', wi_cfg($neu, 'herzschlag', '60'),
@@ -368,34 +516,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
     $neu['abgleich_takt'] = $zahl('abgleich_takt', wi_cfg($neu, 'abgleich_takt', '0'),
                                wi_t('EINST.ABGLEICH'), 0, 86400);
 
-    // V23/3.0.9: welche Stoercodetabelle gilt. Leer ist ein gueltiger Wert
-    // und heisst "keine" - der Datenpunkt 372 bedeutet je nach Waermeerzeuger
-    // Verschiedenes, und eine falsche Tabelle ist schlimmer als keine.
+    // V23/3.0.9: welche Stoercodetabelle gilt. Leer ist ein gueltiger Wert.
     $wi_alt_sc = wi_cfg($neu, 'stoercodes', '');
-    $sc = isset($_POST['stoercodes']) ? trim((string) $_POST['stoercodes']) : $wi_alt_sc;
+    $sc = isset($_POST['stoercodes']) && is_string($_POST['stoercodes'])
+        ? trim((string) $_POST['stoercodes']) : $wi_alt_sc;
     if ($sc === '' || isset(wi_stoercode_tabellen()[$sc])) {
         $neu['stoercodes'] = $sc;
     } else {
         $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.SC_UNGUELTIG'),
                                        wi_e($sc), wi_e($wi_alt_sc));
-        $neu['stoercodes'] = $wi_alt_sc;
+        $wi_falsch[] = 'stoercodes';
     }
 
-    // V19: die Multicast-Gruppe ist wieder waehlbar. Bis 3.0.7 uebernahm die
-    // Oberflaeche die Adresse AUSSCHLIESSLICH aus der Miniserver-Auswahl - wer
-    // einmal einen Miniserver gewaehlt hatte, kam nie wieder zum Gruppenbetrieb
-    // zurueck.
-    $ms = isset($_POST['ms']) ? (string) $_POST['ms'] : '';
+    /* V19: die Multicast-Gruppe ist waehlbar.
+     * O5/O7 (Durchgang 02.10.2026): ein Miniserver mit Rechnernamen wird
+     * aufgeloest (und das gesagt) oder beanstandet; einer mit LEERER Adresse
+     * wird beanstandet. Bis 3.1.5 ging der Rechnername ungeprueft in die
+     * Datei, und der Dienst sendete still an die Multicast-Gruppe (O5); die
+     * leere Adresse wurde still verworfen und "Gespeichert." gemeldet (O7).
+     * Der Wert laeuft jetzt durch wi_wert_taugt(), wie jeder andere. */
+    $ms = isset($_POST['ms']) && is_string($_POST['ms']) ? (string) $_POST['ms'] : '';
     if ($ms === 'gruppe') {
         $neu['multicast_ip'] = '239.7.7.77';
     } elseif ($ms !== '') {
         $mslist = wi_miniservers();
-        if (isset($mslist[$ms]) && $mslist[$ms]['ip'] !== '') {
-            $neu['multicast_ip'] = $mslist[$ms]['ip'];
+        if (!isset($mslist[$ms])) {
+            $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.MS_UNBEKANNT'), wi_e($ms));
+            $wi_falsch[] = 'ms';
+        } elseif (trim((string) $mslist[$ms]['ip']) === '') {
+            $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.MS_OHNE_ADRESSE'), wi_e($mslist[$ms]['name']));
+            $wi_falsch[] = 'ms';
+        } else {
+            $wi_msip = trim((string) $mslist[$ms]['ip']);
+            if (wi_wert_taugt('multicast_ip', $wi_msip)) {
+                $neu['multicast_ip'] = $wi_msip;
+            } else {
+                $wi_aufg = wi_ipv4_aufloesen($wi_msip);
+                if ($wi_aufg !== '' && wi_wert_taugt('multicast_ip', $wi_aufg)) {
+                    $neu['multicast_ip'] = $wi_aufg;
+                    $wi_hinweise[] = sprintf(wi_t('MELDUNG.MS_AUFGELOEST'), wi_e($mslist[$ms]['name']),
+                                             wi_e($wi_msip), wi_e($wi_aufg));
+                } else {
+                    $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.MS_NAME'), wi_e($mslist[$ms]['name']),
+                                                   wi_e($wi_msip));
+                    $wi_falsch[] = 'ms';
+                }
+            }
         }
     }
 
-    if (wi_config_write($neu)) {
+    if ($wi_beanstandungen) {
+        $wi_eingaben = array('formular' => 'einst',
+            'werte' => wi_eingaben_von(array('fw_version', 'stoercodes', 'ism8i_port', 'input_port',
+                                             'output', 'ms', 'multicast_port', 'herzschlag',
+                                             'online_timeout', 'abgleich_takt'),
+                                       array('enable', 'pull_on_write', 'dp_log')),
+            'falsch' => array_values(array_unique($wi_falsch)));
+    } elseif (wi_config_write($neu)) {
         $wi_saved = true;
         $wi_hinweis = wi_dienst_uebernehmen($neu, $wi_vorher);
     } else {
@@ -405,19 +582,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save'])) {
 
 /* ============ Speichern: MQTT - eigener Handler (V12) ============
  *
- * Der Einstellungs-Handler fasst die MQTT-Werte nicht mehr an. Er laedt
- * ohnehin den Bestand, die Werte ueberleben also unveraendert. Stuende dort
- * weiter isset($_POST['mqtt']), schaltete jedes Speichern der Einstellungen
- * MQTT stillschweigend ab.
+ * Der Einstellungs-Handler fasst die MQTT-Werte nicht an.
+ * O2 (Durchgang 02.10.2026): bei einer Beanstandung nichts speichern; bis
+ * 3.1.5 war mit "MQTT aus" und einem unzulaessigen Praefix "mqtt 0"
+ * gespeichert (Bericht oberflaeche, O2).
+ * M3/M4 (Durchgang 02.10.2026): das alte Praefix wird vorgemerkt, damit
+ * Aufraeumen und Deinstallation es leeren; MQTT aus leert danach am Broker.
  */
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_mqtt'])) {
+if ($wi_post && isset($_POST['save_mqtt'])) {
     $wi_tab = 'tab-mqtt';
     $wi_vorher = wi_config_read();
     $neu = $wi_vorher;
     $neu['mqtt'] = isset($_POST['mqtt']) ? '1' : '0';
 
     $alt_pre = wi_cfg($neu, 'praefix', 'wolf_ng');
-    $pre = strtolower(trim((string) (isset($_POST['praefix']) ? $_POST['praefix'] : $alt_pre)));
+    // Kleinschreiben und Leerraum am Rand abschneiden bleiben still
+    // (Entscheidung 19, benannte Ausnahmen).
+    $pre = strtolower(trim((string) (isset($_POST['praefix']) && is_string($_POST['praefix'])
+        ? $_POST['praefix'] : $alt_pre)));
     if ($pre === '') {
         $pre = $alt_pre;
     }
@@ -429,14 +611,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_mqtt'])) {
         $neu['praefix'] = $pre;
     } else {
         $wi_beanstandungen[] = sprintf(wi_t('MELDUNG.PRAEFIX_UNGUELTIG'), wi_e($pre), wi_e($alt_pre));
-        $neu['praefix'] = $alt_pre;
     }
 
-    if (wi_config_write($neu)) {
+    if ($wi_beanstandungen) {
+        $wi_eingaben = array('formular' => 'mqtt',
+            'werte' => wi_eingaben_von(array('praefix'), array('mqtt')),
+            'falsch' => array('praefix'));
+    } elseif (wi_config_write($neu)) {
         $wi_saved = true;
+        if ($wechsel !== '') {
+            wi_praefix_vormerken($alt_pre);
+        }
         $wi_hinweis = trim($wechsel . ' ' . wi_dienst_uebernehmen($neu, $wi_vorher));
+        if (wi_cfg($wi_vorher, 'mqtt', '1') === '1' && $neu['mqtt'] !== '1') {
+            // Der Dienst trennt nach SIGHUP sauber; erst danach leeren, sonst
+            // schriebe er "online" gleich wieder.
+            sleep(2);
+            list($wi_lrc, $wi_lz) = wi_mqtt_leeren($neu);
+            foreach ($wi_lz as $wi_l) {
+                $wi_hinweise[] = wi_e(preg_replace('/^<[A-Z]+> /', '', $wi_l));
+            }
+        }
     } else {
         $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e($wi_p['config']));
+    }
+}
+
+/* ============ Umleitung (PRG, Bauliste O1) ============
+ *
+ * JEDER POST endet hier mit 303 - auch einer, den der Wachposten abgewiesen
+ * hat. Laesst sich die Einmalmeldung nicht ablegen, wird die Seite wie bis
+ * 3.1.5 unmittelbar gezeigt: lieber ohne Umleitung als ohne Ergebnis. */
+if ($wi_post) {
+    $wi_flash = array('ts' => time(), 'saved' => $wi_saved ? 1 : 0, 'error' => $wi_error,
+                      'hinweis' => (string) $wi_hinweis, 'beanstandungen' => $wi_beanstandungen,
+                      'hinweise' => $wi_hinweise, 'test_titel' => $wi_test_titel,
+                      'test_text' => $wi_test_text, 'test_tab' => $wi_test_tab,
+                      'sg_probe' => $wi_sg_probe, 'eingaben' => $wi_eingaben, 'tab' => $wi_tab);
+    if (wi_json_schreiben($wi_flash_datei, $wi_flash, 0600)) {
+        header('Location: index.php?tab=' . substr($wi_tab, 4), true, 303);
+        exit;
     }
 }
 
@@ -479,6 +693,12 @@ $wi_frame = class_exists('LBWeb', false);
 if ($wi_frame) {
     LBWeb::lbheader('Wolf ISM8 Server', 'https://wiki.loxberry.de/', 'help.html');
 }
+/* O11 (Durchgang 02.10.2026): der eigene Teil der Seite geht durch einen
+ * Puffer. Die Pruefzeilen "Tragen alle Formulare das Merkmal?" und "Setzt
+ * der Server sm-active?" messen danach das GERENDERTE HTML, nicht den
+ * Quelltext (wi_pruef_gerendert() in wi_test.php). */
+ob_start();
+$wi_sicherung_mangel = wi_sicherung_maengel($wi_cfg);
 ?>
 <style>
 .sm-wrap { max-width: 980px; margin: 0 auto; font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; color: #333; }
@@ -578,6 +798,9 @@ if ($wi_frame) {
    BYD-Autos. Ergaenzt 07.09.2026: die Klasse stand seit der
    Pfeil-Korrektur im HTML, ohne dass es sie noch gab. */
 .sm-wrap .sm-auswahl { max-width: 520px; }
+/* Ein beanstandetes Feld (X-2, Regeln/04): rot umrandet, die Eingabe steht darin. */
+.sm-wrap .sm-beanstandet { border: 2px solid #c62828 !important; background: #fff5f5 !important; }
+.sm-wrap input[type=checkbox].sm-beanstandet { outline: 2px solid #c62828; outline-offset: 2px; }
 </style>
 <div class="sm-wrap">
 
@@ -591,6 +814,9 @@ if ($wi_frame) {
 <ul style="margin:6px 0 0 18px;">
 <?php foreach ($wi_beanstandungen as $wi_b) { ?><li><?= $wi_b ?></li><?php } ?>
 </ul></div>
+<?php } ?>
+<?php foreach ($wi_hinweise as $wi_h) { ?>
+<div class="sm-warnung"><?= $wi_h ?></div>
 <?php } ?>
 
 <div class="sm-alert sm-info">
@@ -650,37 +876,37 @@ if ($wi_frame) {
 <input data-role="none" type="hidden" name="activetab" value="tab-settings"><?= wi_fmt() ?>
 
 <h2><?= wi_t('EINST.H_SERVER') ?></h2>
-<label class="sm-check"><input data-role="none" type="checkbox" name="enable" value="1"<?= wi_cfg($wi_cfg, 'enable', '0') === '1' ? ' checked' : '' ?>> <?= wi_t('EINST.EINSCHALTEN') ?></label>
+<label class="sm-check"><input data-role="none" type="checkbox" name="enable" value="1"<?= wi_fh('einst', 'enable', wi_cfg($wi_cfg, 'enable', '0')) ? ' checked' : '' ?>> <?= wi_t('EINST.EINSCHALTEN') ?></label>
 <div class="sm-small"><?= wi_t('EINST.EINSCHALTEN_HINT') ?></div>
 
 <div class="sm-row">
 <div>
 <label><?= wi_t('EINST.FIRMWARE') ?></label>
-<select data-role="none" name="fw_version">
+<select data-role="none" name="fw_version"<?= wi_fm('fw_version') ?>>
 <?php foreach (array('1.4', '1.5', '1.7', '1.8', '1.9') as $v) { ?>
-<option value="<?= $v ?>"<?= $wi_fw === $v ? ' selected' : '' ?>><?= $v ?></option>
+<option value="<?= $v ?>"<?= wi_fw('einst', 'fw_version', $wi_fw) === $v ? ' selected' : '' ?>><?= $v ?></option>
 <?php } ?>
 </select>
 <div class="sm-small"><?= wi_t('EINST.FIRMWARE_HINT') ?></div>
 </div>
 <div>
 <label><?= wi_t('EINST.STOERTAB') ?></label>
-<select data-role="none" name="stoercodes">
-<option value=""<?= $wi_sc_wahl === '' ? ' selected' : '' ?>><?= wi_t('EINST.STOERTAB_KEINE') ?></option>
+<select data-role="none" name="stoercodes"<?= wi_fm('stoercodes') ?>>
+<option value=""<?= wi_fw('einst', 'stoercodes', $wi_sc_wahl) === '' ? ' selected' : '' ?>><?= wi_t('EINST.STOERTAB_KEINE') ?></option>
 <?php foreach (wi_stoercode_tabellen() as $wi_k => $wi_v) { ?>
-<option value="<?= wi_e($wi_k) ?>"<?= $wi_sc_wahl === $wi_k ? ' selected' : '' ?>><?= wi_e($wi_v[0]) ?> (<?= (int) $wi_v[2] ?>)</option>
+<option value="<?= wi_e($wi_k) ?>"<?= wi_fw('einst', 'stoercodes', $wi_sc_wahl) === (string) $wi_k ? ' selected' : '' ?>><?= wi_e($wi_v[0]) ?> (<?= (int) $wi_v[2] ?>)</option>
 <?php } ?>
 </select>
 <div class="sm-small"><?= wi_t('EINST.STOERTAB_HINT') ?></div>
 </div>
 <div>
 <label><?= wi_t('EINST.ISM8_PORT') ?></label>
-<input data-role="none" type="number" name="ism8i_port" min="1" max="65535" value="<?= wi_e(wi_cfg($wi_cfg, 'ism8i_port', '12004')) ?>">
+<input data-role="none" type="number" name="ism8i_port" min="1" max="65535" value="<?= wi_e(wi_fw('einst', 'ism8i_port', wi_cfg($wi_cfg, 'ism8i_port', '12004'))) ?>"<?= wi_fm('ism8i_port') ?>>
 <div class="sm-small"><?= sprintf(wi_t('EINST.ISM8_PORT_HINT'), '<span class="sm-mono">' . wi_e($wi_ip) . '</span>') ?></div>
 </div>
 <div>
 <label><?= wi_t('EINST.INPUT_PORT') ?></label>
-<input data-role="none" type="number" name="input_port" min="1" max="65535" value="<?= wi_e(wi_cfg($wi_cfg, 'input_port', '12005')) ?>">
+<input data-role="none" type="number" name="input_port" min="1" max="65535" value="<?= wi_e(wi_fw('einst', 'input_port', wi_cfg($wi_cfg, 'input_port', '12005'))) ?>"<?= wi_fm('input_port') ?>>
 <div class="sm-small"><?= wi_t('EINST.INPUT_PORT_HINT') ?></div>
 </div>
 </div>
@@ -690,27 +916,32 @@ if ($wi_frame) {
 <div class="sm-row" style="margin-top:12px;">
 <div>
 <label><?= wi_t('EINST.OUTPUT') ?></label>
-<select data-role="none" name="output">
+<select data-role="none" name="output"<?= wi_fm('output') ?>>
 <?php foreach (array('none', 'data', 'csv', 'fhem') as $v) { ?>
-<option value="<?= $v ?>"<?= wi_cfg($wi_cfg, 'output', 'none') === $v ? ' selected' : '' ?>><?= wi_t('EINST.OUT_' . strtoupper($v)) ?></option>
+<option value="<?= $v ?>"<?= wi_fw('einst', 'output', wi_cfg($wi_cfg, 'output', 'none')) === $v ? ' selected' : '' ?>><?= wi_t('EINST.OUT_' . strtoupper($v)) ?></option>
 <?php } ?>
 </select>
 <div class="sm-small"><?= wi_t('EINST.OUTPUT_HINT') ?></div>
 </div>
 <div>
 <label><?= wi_t('EINST.MINISERVER') ?></label>
-<select data-role="none" name="ms">
-<option value=""><?= wi_t('EINST.UNVERAENDERT') ?></option>
-<option value="gruppe"<?= $wi_ms_aktiv === 'gruppe' ? ' selected' : '' ?>><?= wi_t('EINST.GRUPPE') ?></option>
-<?php foreach ($wi_ms as $nr => $m) { ?>
-<option value="<?= wi_e($nr) ?>"<?= (string) $nr === $wi_ms_aktiv ? ' selected' : '' ?>><?= wi_e($m['name']) ?> (<?= wi_e($m['ip']) ?>)</option>
+<?php $wi_ms_wahl = wi_fw('einst', 'ms', $wi_ms_aktiv); ?>
+<select data-role="none" name="ms"<?= wi_fm('ms') ?>>
+<option value=""<?= $wi_ms_wahl === '' ? ' selected' : '' ?>><?= wi_t('EINST.UNVERAENDERT') ?></option>
+<option value="gruppe"<?= $wi_ms_wahl === 'gruppe' ? ' selected' : '' ?>><?= wi_t('EINST.GRUPPE') ?></option>
+<?php foreach ($wi_ms as $nr => $m) {
+    /* O5/O7: was die Auswahl beim Speichern tun wird, steht schon daran. */
+    $wi_msi = trim((string) $m['ip']);
+    $wi_msz = $wi_msi === '' ? wi_t('EINST.MS_OHNE_ADRESSE')
+        : (wi_wert_taugt('multicast_ip', $wi_msi) ? $wi_msi : sprintf(wi_t('EINST.MS_RECHNERNAME'), $wi_msi)); ?>
+<option value="<?= wi_e($nr) ?>"<?= (string) $nr === $wi_ms_wahl ? ' selected' : '' ?>><?= wi_e($m['name']) ?> (<?= wi_e($wi_msz) ?>)</option>
 <?php } ?>
 </select>
 <div class="sm-small"><?= sprintf(wi_t('EINST.MINISERVER_HINT'), '<span class="sm-mono">' . wi_e($wi_mcip) . '</span>') ?></div>
 </div>
 <div>
 <label><?= wi_t('EINST.UDP_PORT') ?></label>
-<input data-role="none" type="number" name="multicast_port" min="1" max="65535" value="<?= wi_e(wi_cfg($wi_cfg, 'multicast_port', '35353')) ?>">
+<input data-role="none" type="number" name="multicast_port" min="1" max="65535" value="<?= wi_e(wi_fw('einst', 'multicast_port', wi_cfg($wi_cfg, 'multicast_port', '35353'))) ?>"<?= wi_fm('multicast_port') ?>>
 </div>
 </div>
 
@@ -718,26 +949,26 @@ if ($wi_frame) {
 <div class="sm-row">
 <div>
 <label><?= wi_t('EINST.HERZSCHLAG') ?></label>
-<input data-role="none" type="number" name="herzschlag" min="0" max="86400" value="<?= wi_e(wi_cfg($wi_cfg, 'herzschlag', '60')) ?>">
+<input data-role="none" type="number" name="herzschlag" min="0" max="86400" value="<?= wi_e(wi_fw('einst', 'herzschlag', wi_cfg($wi_cfg, 'herzschlag', '60'))) ?>"<?= wi_fm('herzschlag') ?>>
 <div class="sm-small"><?= wi_t('EINST.HERZSCHLAG_HINT') ?></div>
 </div>
 <div>
 <label><?= wi_t('EINST.TIMEOUT') ?></label>
-<input data-role="none" type="text" name="online_timeout" value="<?= wi_e(wi_cfg($wi_cfg, 'online_timeout', '-1')) ?>">
+<input data-role="none" type="text" name="online_timeout" value="<?= wi_e(wi_fw('einst', 'online_timeout', wi_cfg($wi_cfg, 'online_timeout', '-1'))) ?>"<?= wi_fm('online_timeout') ?>>
 <div class="sm-small"><?= sprintf(wi_t('EINST.TIMEOUT_HINT'), '<span class="sm-mono">-1</span>') ?></div>
 </div>
 <div>
 <label><?= wi_t('EINST.ABGLEICH') ?></label>
-<input data-role="none" type="number" name="abgleich_takt" min="0" max="86400" value="<?= wi_e(wi_cfg($wi_cfg, 'abgleich_takt', '0')) ?>">
+<input data-role="none" type="number" name="abgleich_takt" min="0" max="86400" value="<?= wi_e(wi_fw('einst', 'abgleich_takt', wi_cfg($wi_cfg, 'abgleich_takt', '0'))) ?>"<?= wi_fm('abgleich_takt') ?>>
 <div class="sm-small"><?= wi_t('EINST.ABGLEICH_HINT') ?></div>
 </div>
 </div>
 
 <h2><?= wi_t('EINST.H_WEITERE') ?></h2>
-<label class="sm-check"><input data-role="none" type="checkbox" name="pull_on_write" value="1"<?= wi_cfg($wi_cfg, 'pull_on_write', '0') === '1' ? ' checked' : '' ?>> <?= wi_t('EINST.PULL') ?></label>
+<label class="sm-check"><input data-role="none" type="checkbox" name="pull_on_write" value="1"<?= wi_fh('einst', 'pull_on_write', wi_cfg($wi_cfg, 'pull_on_write', '0')) ? ' checked' : '' ?>> <?= wi_t('EINST.PULL') ?></label>
 <div class="sm-small"><?= wi_t('EINST.PULL_HINT') ?></div>
 
-<label class="sm-check" style="margin-top:10px;"><input data-role="none" type="checkbox" name="dp_log" value="1"<?= wi_cfg($wi_cfg, 'dp_log', '0') === '1' ? ' checked' : '' ?>> <?= wi_t('EINST.DPLOG') ?></label>
+<label class="sm-check" style="margin-top:10px;"><input data-role="none" type="checkbox" name="dp_log" value="1"<?= wi_fh('einst', 'dp_log', wi_cfg($wi_cfg, 'dp_log', '0')) ? ' checked' : '' ?>> <?= wi_t('EINST.DPLOG') ?></label>
 <div class="sm-small"><?= wi_t('EINST.DPLOG_HINT') ?></div>
 
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save" value="1"><?= wi_t('EINST.SPEICHERN') ?></button>
@@ -749,6 +980,9 @@ if ($wi_frame) {
 <span><i class="sm-punkt sm-b-lesen"></i> <?= wi_t('LEGENDE.LESEN') ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?= wi_t('LEGENDE.AKTION') ?></span>
 </div>
+<?php if ($wi_sicherung_mangel) { ?>
+<div class="sm-warnung"><?= sprintf(wi_t('EINST.SICHERN_WARNUNG'), wi_e(implode(', ', $wi_sicherung_mangel))) ?></div>
+<?php } ?>
 <div class="sm-knopfreihe">
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-settings"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="sichern" value="1"><?= wi_t('EINST.SICHERN') ?></button></form>
 </div>
@@ -766,10 +1000,10 @@ if ($wi_frame) {
 <h2><?= wi_t('MQTT.H_EINSTELLUNG') ?></h2>
 <form method="post" action="index.php">
 <input data-role="none" type="hidden" name="activetab" value="tab-mqtt"><?= wi_fmt() ?>
-<label class="sm-check"><input data-role="none" type="checkbox" name="mqtt" value="1"<?= wi_cfg($wi_cfg, 'mqtt', '1') === '1' ? ' checked' : '' ?>> <?= wi_t('MQTT.EIN') ?></label>
+<label class="sm-check"><input data-role="none" type="checkbox" name="mqtt" value="1"<?= wi_fh('mqtt', 'mqtt', wi_cfg($wi_cfg, 'mqtt', '1')) ? ' checked' : '' ?>> <?= wi_t('MQTT.EIN') ?></label>
 <div class="sm-small"><?= wi_t('MQTT.EIN_HINT') ?></div>
 <label style="margin-top:12px;"><?= wi_t('MQTT.PRAEFIX') ?></label>
-<input data-role="none" type="text" name="praefix" value="<?= wi_e($wi_pre) ?>" style="max-width:280px;">
+<input data-role="none" type="text" name="praefix" value="<?= wi_e(wi_fw('mqtt', 'praefix', $wi_pre)) ?>" style="max-width:280px;"<?= wi_fm('praefix') ?>>
 <div class="sm-alert sm-warn"><?= wi_t('MQTT.PRAEFIX_HINT') ?></div>
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save_mqtt" value="1"><?= wi_t('MQTT.SPEICHERN') ?></button>
 </form>
@@ -829,9 +1063,12 @@ $wi_gwf = ($wi_gw === null) ? 0 : (int) $wi_gw['fassung'];
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th><?= wi_t('LOXONE.TH_THEMA') ?></th><th><?= wi_t('MQTT.TH_BEDEUTUNG') ?></th><th style="width:90px;"><?= wi_t('MQTT.TH_RETAIN') ?></th></tr>
-<tr><td><span class="sm-mono"><?= wi_e($wi_pre) ?>/online</span></td><td><?= wi_t('MQTT.B_ONLINE') ?></td><td><?= wi_t('MQTT.RET_JA') ?></td></tr>
-<tr><td><span class="sm-mono"><?= wi_e($wi_pre) ?>/zeitstempel</span></td><td><?= wi_t('MQTT.B_ZEIT') ?></td><td><?= wi_t('MQTT.RET_NEIN') ?></td></tr>
-<tr><td><span class="sm-mono"><?= wi_e($wi_pre) ?>/zaehler</span></td><td><?= wi_t('MQTT.B_ZAEHLER') ?></td><td><?= wi_t('MQTT.RET_NEIN') ?></td></tr>
+<?php
+/* O11 (Durchgang 02.10.2026): die festen Themen aus EINER Liste
+ * (wi_mqtt_feste_themen()); der Reiter Test zaehlt sie gegen den Sendecode. */
+foreach (wi_mqtt_feste_themen() as $wi_ft => $wi_fa) { ?>
+<tr><td><span class="sm-mono"><?= wi_e($wi_pre) ?>/<?= wi_e($wi_ft) ?></span></td><td><?= wi_t($wi_fa[1]) ?></td><td><?= $wi_fa[0] ? wi_t('MQTT.RET_JA') : wi_t('MQTT.RET_NEIN') ?></td></tr>
+<?php } ?>
 <?php
 $wi_zeit_typen = array('DPT_TimeOfDay', 'DPT_Date');
 $wi_gezeigt = 0;
@@ -839,20 +1076,35 @@ foreach ($wi_dps as $d) {
     if (strpos($d['io'], 'Out') === false || in_array($d['dpt'], $wi_zeit_typen, true)) { continue; }
     $wi_gezeigt++;
 ?>
-<tr><td><span class="sm-mono" style="font-size:0.85em;"><?= wi_e(wi_topic($d)) ?></span></td><td><?= wi_e($d['geraet']) ?> &mdash; <?= wi_e($d['name']) ?><?= $d['einheit'] !== '-' ? ' (' . wi_e($d['einheit']) . ')' : '' ?></td><td><?= wi_ist_zustand($d['dpt']) ? wi_t('MQTT.RET_JA') : wi_t('MQTT.RET_NEIN') ?></td></tr>
+<tr><td><span class="sm-mono" style="font-size:0.85em;"><?= wi_e(wi_topic($d)) ?></span></td><td><?= wi_e($d['geraet']) ?> &mdash; <?= wi_e($d['name']) ?><?= $d['einheit'] !== '-' ? ' (' . wi_e($d['einheit']) . ')' : '' ?></td><td><?= wi_ist_zustand($d['dpt'], $d['io']) ? wi_t('MQTT.RET_JA') : wi_t('MQTT.RET_NEIN') ?></td></tr>
+<?php } ?>
+<?php
+/* M9 (Durchgang 02.10.2026): die Themen des SG-Moduls stehen mit in der
+ * Liste. Bis 3.1.5 fehlten sie hier, obwohl wi_sg_mqtt_themen() sie fuehrt
+ * (Bericht mqtt, Befund 9). Sie gehen nur mit eingeschaltetem SG-Modul
+ * hinaus, alle fluechtig. */
+foreach (wi_sg_mqtt_themen() as $wi_st) { ?>
+<tr><td><span class="sm-mono" style="font-size:0.85em;"><?= wi_e($wi_pre) ?>/<?= wi_e($wi_st) ?></span></td><td><?= wi_t('MQTT.B_SG_' . strtoupper(substr($wi_st, 3))) ?></td><td><?= wi_t('MQTT.RET_NEIN') ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<div class="sm-small"><?= sprintf(wi_t('MQTT.THEMEN_ZAHL'), $wi_gezeigt + 3, count($wi_dps) - $wi_gezeigt) ?></div>
+<div class="sm-small"><?= sprintf(wi_t('MQTT.THEMEN_ZAHL'), $wi_gezeigt + count(wi_mqtt_feste_themen()), count($wi_dps) - $wi_gezeigt) ?>
+<?= sprintf(wi_t('MQTT.THEMEN_SG'), count(wi_sg_mqtt_themen())) ?></div>
 
 <h2><?= wi_t('MQTT.H_AUFRAEUMEN') ?></h2>
 <div class="sm-small"><?= wi_t('MQTT.AUFRAEUMEN_HINT') ?></div>
 <div class="sm-legende">
-<span><i class="sm-punkt sm-b-lesen"></i> <?= wi_t('LEGENDE.LESEN') ?></span>
+<span><i class="sm-punkt sm-b-technik"></i> <?= wi_t('LEGENDE.TECHNIK') ?></span>
 <span><i class="sm-punkt sm-b-aktion"></i> <?= wi_t('LEGENDE.AKTION') ?></span>
 </div>
+<?php /* O13 (Durchgang 02.10.2026, Regeln/04): der Trockenlauf ist grau, der
+       * scharfe Knopf steht unter "Schalten" in einer eigenen Reihe. */ ?>
 <div class="sm-knopfreihe">
-<form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-mqtt"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="aufraeumen_probe"><?= wi_t('MQTT.AUFRAEUMEN_PROBE') ?></button></form>
+<form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-mqtt"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-technik" type="submit" name="test" value="aufraeumen_probe"><?= wi_t('MQTT.AUFRAEUMEN_PROBE') ?></button></form>
+</div>
+<h3 class="sm-h3"><?= wi_t('TEST.H_SCHALTEN') ?></h3>
+<div class="sm-small"><?= wi_t('MQTT.AUFRAEUMEN_SCHALTEN') ?></div>
+<div class="sm-knopfreihe">
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-mqtt"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="aufraeumen"><?= wi_t('MQTT.AUFRAEUMEN') ?></button></form>
 </div>
 <?php if ($wi_test_titel !== '' && $wi_tab === 'tab-mqtt') { ?>
@@ -885,6 +1137,14 @@ $wi_sgm = wi_sg_merker();
 <div class="sm-small"><?= sprintf(wi_t('SG.ZULETZT'),
     wi_e(wi_t('SG.LAGE_' . strtoupper((string) $wi_sgm['lage']))),
     wi_e(wi_alter_text(max(0, time() - (int) $wi_sgm['ts'])))) ?></div>
+<?php } ?>
+<?php if ($wi_sgl['gekappt']) { ?>
+<div class="sm-warnung"><?= sprintf(wi_t('SG.GEKAPPT'), (int) $wi_sgl['laden_max'],
+    wi_e(date('d.m. H:i', (int) $wi_sgl['laden_seit']))) ?></div>
+<?php } elseif ($wi_sgl['lage'] === 'laden' && (int) $wi_sgl['laden_seit'] > 0) { ?>
+<div class="sm-small"><?= sprintf(wi_t('SG.LADEN_BIS'),
+    wi_e(date('d.m. H:i', (int) $wi_sgl['laden_seit'] + 3600 * (int) $wi_sgl['laden_max'])),
+    (int) $wi_sgl['laden_max']) ?></div>
 <?php } ?>
 
 <?php if ($wi_sgl['fehlt']) { ?>
@@ -934,10 +1194,10 @@ $wi_sgm = wi_sg_merker();
 <div class="sm-knopfreihe">
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-sg"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-technik" type="submit" name="sg_probe" value="1"><?= wi_t('SG.PROBE') ?></button></form>
 </div>
-<?php if (isset($wi_sg_probe)) { ?>
+<?php if (is_array($wi_sg_probe) && isset($wi_sg_probe[2]) && is_array($wi_sg_probe[2])) { ?>
 <div class="sm-alert sm-info"><b><?= wi_t('SG.PROBE_H') ?></b><br>
 <?php foreach ($wi_sg_probe[2] as $wi_m) { ?>
-<span class="sm-mono"><?= wi_e(vsprintf(wi_t($wi_m[0]), $wi_m[1])) ?></span><br>
+<span class="sm-mono"><?= wi_e(vsprintf(wi_t((string) $wi_m[0]), (array) $wi_m[1])) ?></span><br>
 <?php } ?>
 </div>
 <?php } ?>
@@ -947,70 +1207,74 @@ $wi_sgm = wi_sg_merker();
 <input data-role="none" type="hidden" name="activetab" value="tab-sg"><?= wi_fmt() ?>
 <input data-role="none" type="hidden" name="formular" value="sg">
 
-<label class="sm-check"><input data-role="none" type="checkbox" name="sg_ein" value="1"<?= wi_cfg($wi_cfg, 'sg_ein', '0') === '1' ? ' checked' : '' ?>> <?= wi_t('SG.F_EIN') ?></label>
+<label class="sm-check"><input data-role="none" type="checkbox" name="sg_ein" value="1"<?= wi_fh('sg', 'sg_ein', wi_cfg($wi_cfg, 'sg_ein', '0')) ? ' checked' : '' ?><?= wi_fm('sg_ein') ?>> <?= wi_t('SG.F_EIN') ?></label>
 <div class="sm-hilfe"><?= wi_t('SG.F_EIN_HINT') ?></div>
 
-<label class="sm-check"><input data-role="none" type="checkbox" name="sg_senden" value="1"<?= wi_cfg($wi_cfg, 'sg_senden', '0') === '1' ? ' checked' : '' ?>> <?= wi_t('SG.F_SENDEN') ?></label>
+<label class="sm-check"><input data-role="none" type="checkbox" name="sg_senden" value="1"<?= wi_fh('sg', 'sg_senden', wi_cfg($wi_cfg, 'sg_senden', '0')) ? ' checked' : '' ?><?= wi_fm('sg_senden') ?>> <?= wi_t('SG.F_SENDEN') ?></label>
 <div class="sm-hilfe"><?= wi_t('SG.F_SENDEN_HINT') ?></div>
 
 <label for="sg_quelle"><?= wi_t('SG.F_QUELLE') ?></label>
-<select data-role="none" class="sm-auswahl" id="sg_quelle" name="sg_quelle">
+<select data-role="none" class="sm-auswahl" id="sg_quelle" name="sg_quelle"<?= wi_fm('sg_quelle') ?>>
 <?php foreach (array('aus', 'datei', 'awattar') as $wi_q) { ?>
-<option value="<?= $wi_q ?>"<?= wi_cfg($wi_cfg, 'sg_quelle', 'aus') === $wi_q ? ' selected' : '' ?>><?= wi_t('SG.Q_' . strtoupper($wi_q)) ?></option>
+<option value="<?= $wi_q ?>"<?= wi_fw('sg', 'sg_quelle', wi_cfg($wi_cfg, 'sg_quelle', 'aus')) === $wi_q ? ' selected' : '' ?>><?= wi_t('SG.Q_' . strtoupper($wi_q)) ?></option>
 <?php } ?>
 </select>
 <div class="sm-hilfe"><?= wi_t('SG.F_QUELLE_HINT') ?></div>
 
 <label for="sg_awattar_ordner"><?= wi_t('SG.F_ORDNER') ?></label>
-<input data-role="none" type="text" id="sg_awattar_ordner" name="sg_awattar_ordner" value="<?= wi_e(wi_cfg($wi_cfg, 'sg_awattar_ordner', 'spotpreis')) ?>">
+<input data-role="none" type="text" id="sg_awattar_ordner" name="sg_awattar_ordner" value="<?= wi_e(wi_fw('sg', 'sg_awattar_ordner', wi_cfg($wi_cfg, 'sg_awattar_ordner', 'spotpreis'))) ?>"<?= wi_fm('sg_awattar_ordner') ?>>
 <div class="sm-hilfe"><?= wi_t('SG.F_ORDNER_HINT') ?></div>
 
 <label for="sg_kreis"><?= wi_t('SG.F_KREIS') ?></label>
-<select data-role="none" class="sm-auswahl" id="sg_kreis" name="sg_kreis">
+<select data-role="none" class="sm-auswahl" id="sg_kreis" name="sg_kreis"<?= wi_fm('sg_kreis') ?>>
 <?php foreach (wi_sg_kreise() as $wi_kk => $wi_kn) { ?>
-<option value="<?= $wi_kk ?>"<?= wi_cfg($wi_cfg, 'sg_kreis', 'direkt') === $wi_kk ? ' selected' : '' ?>><?= wi_e($wi_kn) ?></option>
+<option value="<?= $wi_kk ?>"<?= wi_fw('sg', 'sg_kreis', wi_cfg($wi_cfg, 'sg_kreis', 'direkt')) === $wi_kk ? ' selected' : '' ?>><?= wi_e($wi_kn) ?></option>
 <?php } ?>
 </select>
 <div class="sm-hilfe"><?= wi_t('SG.F_KREIS_HINT') ?></div>
 
 <label for="sg_stunden"><?= wi_t('SG.F_STUNDEN') ?></label>
-<input data-role="none" type="number" min="0" max="24" step="1" id="sg_stunden" name="sg_stunden" value="<?= wi_e(wi_cfg($wi_cfg, 'sg_stunden', '4')) ?>">
+<input data-role="none" type="number" min="0" max="24" step="1" id="sg_stunden" name="sg_stunden" value="<?= wi_e(wi_fw('sg', 'sg_stunden', wi_cfg($wi_cfg, 'sg_stunden', '4'))) ?>"<?= wi_fm('sg_stunden') ?>>
 
 <label for="sg_block"><?= wi_t('SG.F_BLOCK') ?></label>
-<input data-role="none" type="number" min="1" max="12" step="1" id="sg_block" name="sg_block" value="<?= wi_e(wi_cfg($wi_cfg, 'sg_block', '2')) ?>">
+<input data-role="none" type="number" min="1" max="12" step="1" id="sg_block" name="sg_block" value="<?= wi_e(wi_fw('sg', 'sg_block', wi_cfg($wi_cfg, 'sg_block', '2'))) ?>"<?= wi_fm('sg_block') ?>>
 <div class="sm-hilfe"><?= wi_t('SG.F_BLOCK_HINT') ?></div>
 
 <label for="sg_horizont"><?= wi_t('SG.F_HORIZONT') ?></label>
-<input data-role="none" type="number" min="1" max="48" step="1" id="sg_horizont" name="sg_horizont" value="<?= wi_e(wi_cfg($wi_cfg, 'sg_horizont', '24')) ?>">
+<input data-role="none" type="number" min="1" max="48" step="1" id="sg_horizont" name="sg_horizont" value="<?= wi_e(wi_fw('sg', 'sg_horizont', wi_cfg($wi_cfg, 'sg_horizont', '24'))) ?>"<?= wi_fm('sg_horizont') ?>>
 
 <label for="sg_ww_normal"><?= wi_t('SG.F_WW_NORMAL') ?></label>
-<input data-role="none" type="text" id="sg_ww_normal" name="sg_ww_normal" value="<?= wi_e(wi_cfg($wi_cfg, 'sg_ww_normal', '48')) ?>">
+<input data-role="none" type="text" id="sg_ww_normal" name="sg_ww_normal" value="<?= wi_e(wi_fw('sg', 'sg_ww_normal', wi_cfg($wi_cfg, 'sg_ww_normal', '48'))) ?>"<?= wi_fm('sg_ww_normal') ?>>
 
 <label for="sg_ww_laden"><?= wi_t('SG.F_WW_LADEN') ?></label>
-<input data-role="none" type="text" id="sg_ww_laden" name="sg_ww_laden" value="<?= wi_e(wi_cfg($wi_cfg, 'sg_ww_laden', '55')) ?>">
+<input data-role="none" type="text" id="sg_ww_laden" name="sg_ww_laden" value="<?= wi_e(wi_fw('sg', 'sg_ww_laden', wi_cfg($wi_cfg, 'sg_ww_laden', '55'))) ?>"<?= wi_fm('sg_ww_laden') ?>>
 <div class="sm-hilfe"><?= wi_t('SG.F_WW_HINT') ?></div>
 
 <label for="sg_korrektur"><?= wi_t('SG.F_KORREKTUR') ?></label>
-<input data-role="none" type="text" id="sg_korrektur" name="sg_korrektur" value="<?= wi_e(wi_cfg($wi_cfg, 'sg_korrektur', '2')) ?>">
+<input data-role="none" type="text" id="sg_korrektur" name="sg_korrektur" value="<?= wi_e(wi_fw('sg', 'sg_korrektur', wi_cfg($wi_cfg, 'sg_korrektur', '2'))) ?>"<?= wi_fm('sg_korrektur') ?>>
 <div class="sm-hilfe"><?= wi_t('SG.F_KORREKTUR_HINT') ?></div>
+
+<label for="sg_laden_max"><?= wi_t('SG.F_LADEN_MAX') ?></label>
+<input data-role="none" type="number" min="1" max="24" step="1" id="sg_laden_max" name="sg_laden_max" value="<?= wi_e(wi_fw('sg', 'sg_laden_max', wi_cfg($wi_cfg, 'sg_laden_max', '6'))) ?>"<?= wi_fm('sg_laden_max') ?>>
+<div class="sm-hilfe"><?= wi_t('SG.F_LADEN_MAX_HINT') ?></div>
 
 <h3 class="sm-h3"><?= wi_t('SG.H_14A') ?></h3>
 <div class="sm-hinweis"><?= wi_t('SG.E14_EINLEITUNG') ?></div>
 
-<label class="sm-check"><input data-role="none" type="checkbox" name="sg_14a" value="1"<?= wi_cfg($wi_cfg, 'sg_14a', '0') === '1' ? ' checked' : '' ?>> <?= wi_t('SG.F_14A') ?></label>
+<label class="sm-check"><input data-role="none" type="checkbox" name="sg_14a" value="1"<?= wi_fh('sg', 'sg_14a', wi_cfg($wi_cfg, 'sg_14a', '0')) ? ' checked' : '' ?>> <?= wi_t('SG.F_14A') ?></label>
 <div class="sm-hilfe"><?= sprintf(wi_t('SG.F_14A_HINT'),
     '<span class="sm-mono">' . wi_e(wi_paths()['home'] !== '' ? wi_paths()['home'] . '/data/plugins/' . wi_paths()['plugin'] . '/sg_14a.json' : 'data/plugins/&lt;ordner&gt;/sg_14a.json') . '</span>') ?></div>
 
 <label for="sg_14a_modus"><?= wi_t('SG.F_14A_MODUS') ?></label>
-<select data-role="none" class="sm-auswahl" id="sg_14a_modus" name="sg_14a_modus">
+<select data-role="none" class="sm-auswahl" id="sg_14a_modus" name="sg_14a_modus"<?= wi_fm('sg_14a_modus') ?>>
 <?php foreach (array('spar', 'standby') as $wi_mm) { ?>
-<option value="<?= $wi_mm ?>"<?= wi_cfg($wi_cfg, 'sg_14a_modus', 'spar') === $wi_mm ? ' selected' : '' ?>><?= wi_t('SG.M14_' . strtoupper($wi_mm)) ?></option>
+<option value="<?= $wi_mm ?>"<?= wi_fw('sg', 'sg_14a_modus', wi_cfg($wi_cfg, 'sg_14a_modus', 'spar')) === $wi_mm ? ' selected' : '' ?>><?= wi_t('SG.M14_' . strtoupper($wi_mm)) ?></option>
 <?php } ?>
 </select>
 <div class="sm-hilfe"><?= wi_t('SG.F_14A_MODUS_HINT') ?></div>
 
 <label for="sg_14a_alter"><?= wi_t('SG.F_14A_ALTER') ?></label>
-<input data-role="none" type="number" min="0" max="86400" step="1" id="sg_14a_alter" name="sg_14a_alter" value="<?= wi_e(wi_cfg($wi_cfg, 'sg_14a_alter', '900')) ?>">
+<input data-role="none" type="number" min="0" max="86400" step="1" id="sg_14a_alter" name="sg_14a_alter" value="<?= wi_e(wi_fw('sg', 'sg_14a_alter', wi_cfg($wi_cfg, 'sg_14a_alter', '900'))) ?>"<?= wi_fm('sg_14a_alter') ?>>
 <div class="sm-hilfe"><?= wi_t('SG.F_14A_ALTER_HINT') ?></div>
 
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save_sg" value="1"><?= wi_t('SG.SPEICHERN') ?></button>
@@ -1183,13 +1447,14 @@ foreach ($wi_pz as $z) {
 <?php if (!$wi_pz) { ?>
 <div class="sm-hinweis"><?= wi_t('TEST.SELBST_RUHT') ?></div>
 <?php } else { ?>
-<div class="sm-small"><?= sprintf(wi_t('TEST.SELBST_BILANZ'), $wi_ja, count($wi_pz), $wi_nein, $wi_grau) ?></div>
+<div class="sm-small"><!--WI_PRUEF_BILANZ--></div>
 <?php } ?>
 <ul class="sm-pruef">
 <?php foreach ($wi_pz as $z) {
     $wi_k = $z[0] === 1 ? 'sm-ja' : ($z[0] === 0 ? 'sm-nein' : 'sm-grau'); ?>
 <li class="<?= $wi_k ?>"><b><?= wi_e($z[1]) ?></b><?= wi_e($z[2]) ?></li>
 <?php } ?>
+<?php if ($wi_pz) { ?><!--WI_PRUEF_GERENDERT--><?php } ?>
 </ul>
 
 <?php if (is_array($wi_zustand) && isset($wi_zustand['zaehler'])) { ?>
@@ -1278,14 +1543,21 @@ foreach ($wi_ids as $wi_id2) {
 <div><label><?= wi_t('TEST.SP_DP') ?></label>
 <select data-role="none" name="sp_id">
 <?php foreach ($wi_dps as $d) { if (strpos($d['io'], 'In') === false) { continue; } ?>
-<option value="<?= (int) $d['id'] ?>"<?= (isset($_POST['sp_id']) && (int) $_POST['sp_id'] === $d['id']) ? ' selected' : '' ?>><?= sprintf('%03d', $d['id']) ?> &mdash; <?= wi_e($d['geraet']) ?> &mdash; <?= wi_e($d['name']) ?> (<?= wi_e($d['dpt']) ?>)</option>
+<option value="<?= (int) $d['id'] ?>"<?= wi_fw('schreibprobe', 'sp_id', '') === (string) $d['id'] ? ' selected' : '' ?>><?= sprintf('%03d', $d['id']) ?> &mdash; <?= wi_e($d['geraet']) ?> &mdash; <?= wi_e($d['name']) ?> (<?= wi_e($d['dpt']) ?>)</option>
 <?php } ?>
 </select></div>
 <div><label><?= wi_t('TEST.SP_WERT') ?></label>
-<input data-role="none" type="text" name="sp_wert" value="<?= wi_e(isset($_POST['sp_wert']) ? (string) $_POST['sp_wert'] : '') ?>"></div>
+<input data-role="none" type="text" name="sp_wert" value="<?= wi_e(wi_fw('schreibprobe', 'sp_wert', '')) ?>"></div>
 </div>
+<?php /* O13 (Durchgang 02.10.2026, Regeln/04): der Trockenlauf ist grau; der
+       * Knopf, der die Heizung beschreibt, steht unter "Schalten" in einer
+       * eigenen Reihe - bis 3.1.5 einen Fingerbreit neben der Probe. */ ?>
 <div class="sm-knopfreihe">
-<button data-role="none" class="sm-btn sm-b-lesen" type="submit" name="test" value="schreibprobe"><?= wi_t('TEST.SP_TROCKEN') ?></button>
+<button data-role="none" class="sm-btn sm-b-technik" type="submit" name="test" value="schreibprobe"><?= wi_t('TEST.SP_TROCKEN') ?></button>
+</div>
+<h3 class="sm-h3"><?= wi_t('TEST.H_SCHALTEN') ?></h3>
+<div class="sm-small"><?= wi_t('TEST.SCHALTEN_HINT') ?></div>
+<div class="sm-knopfreihe">
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="schreibernst"><?= wi_t('TEST.SP_ERNST') ?></button>
 </div>
 </form>
@@ -1422,6 +1694,18 @@ if ($wi_dplog !== '' && $wi_dplog !== $wi_log) {
 })();
 </script>
 <?php
+/* O11: die gerenderten Pruefzeilen einsetzen, dann ausgeben. */
+$wi_html = (string) ob_get_clean();
+if ($wi_pz) {
+    list($wi_gz, $wi_gn) = wi_pruef_gerendert($wi_html, $wi_tab);
+    foreach ($wi_gn as $wi_gs) {
+        if ($wi_gs === 1) { $wi_ja++; } elseif ($wi_gs === 0) { $wi_nein++; } else { $wi_grau++; }
+    }
+    $wi_html = str_replace('<!--WI_PRUEF_GERENDERT-->', $wi_gz, $wi_html);
+    $wi_html = str_replace('<!--WI_PRUEF_BILANZ-->',
+        sprintf(wi_t('TEST.SELBST_BILANZ'), $wi_ja, count($wi_pz) + count($wi_gn), $wi_nein, $wi_grau), $wi_html);
+}
+echo $wi_html;
 if ($wi_frame) {
     LBWeb::lbfooter();
 }

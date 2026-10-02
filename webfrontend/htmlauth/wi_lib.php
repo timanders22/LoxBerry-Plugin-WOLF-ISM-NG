@@ -394,6 +394,12 @@ function wi_defaults()
         'sg_ww_normal'     => '48',
         'sg_ww_laden'      => '55',
         'sg_korrektur'     => '2',
+        /* C1 (Durchgang 02.10.2026, Entscheidung 31): Hoechstdauer einer
+         * zusammenhaengenden Anhebung in Stunden. 6 h, weil der Werksplan
+         * (4 Stunden in Bloecken zu 2) bis zu 4 h am Stueck legt und nicht
+         * gekappt werden soll, und weil eine Anhebung, die laenger als einen
+         * Viertel Tag laeuft, kein Preisfenster mehr ist. */
+        'sg_laden_max'     => '6',
         'sg_14a'           => '0',
         'sg_14a_modus'     => 'spar',
         'sg_14a_alter'     => '900',
@@ -479,7 +485,13 @@ function wi_config_write($cfg)
      * Vorgabewerte zurueck - andere Ports, andere Firmware-Fassung.
      * rename() ist im selben Dateisystem unteilbar. */
     $tmp = $file . '.tmp.' . getmypid();
-    if (@file_put_contents($tmp, $txt, LOCK_EX) === false) {
+    /* C11 (Durchgang 02.10.2026): auch ein GEKUERZTES Schreiben ist ein
+     * Fehlschlag, und die Nebendatei wird dann entfernt. Bis 3.1.5 blieb
+     * nach jedem gescheiterten Speichern wolf_ism8i.conf.tmp.<pid> im
+     * Konfigordner liegen (Bericht code, Befund 12). */
+    $geschrieben = @file_put_contents($tmp, $txt, LOCK_EX);
+    if ($geschrieben !== strlen($txt)) {
+        @unlink($tmp);
         return false;
     }
     @chmod($tmp, 0644);
@@ -624,10 +636,24 @@ function wi_zustandstypen()
     );
 }
 
-/** Geht dieses Thema retained hinaus? */
-function wi_ist_zustand($dpt)
+/**
+ * M7 (Durchgang 02.10.2026): ein SCHREIBBARER Datenpunkt (Spalte Out/In)
+ * traegt einen Sollwert oder eine Vorgabe und ist damit ein Zustand
+ * (Regeln/07: "zuletzt gueltiger Sollwert"). Dieselbe Regel steht als
+ * $ZUSTAND_SCHREIBBAR in bin/wolf_ism8i.pl; der Reiter Test vergleicht beide.
+ */
+function wi_zustand_schreibbar()
 {
-    return in_array((string) $dpt, wi_zustandstypen(), true);
+    return true;
+}
+
+/** Geht dieses Thema retained hinaus? $io ist die Spalte Out/In. */
+function wi_ist_zustand($dpt, $io = '')
+{
+    if (in_array((string) $dpt, wi_zustandstypen(), true)) {
+        return true;
+    }
+    return wi_zustand_schreibbar() && preg_match('#/In$#', (string) $io) === 1;
 }
 
 
@@ -1173,8 +1199,14 @@ function wi_wert_taugt($k, $v)
             return preg_match('/^[0-9]{1,2}(\.[0-9])?$/', $v) === 1
                    && (float) $v >= 30 && (float) $v <= 70;
         case 'sg_korrektur':
+            // C8 (Durchgang 02.10.2026): -4 bis +4 K, wie die
+            // ISM8i-Betriebsanleitung (10/2024, S. 46) den Eingang
+            // "Sollwertkorrektur" begrenzt; der Dienst weist mehr ab. Bis
+            // 3.1.5 liess das Formular -5 bis +5 zu.
             return preg_match('/^-?[0-9]{1,2}(\.[0-9])?$/', $v) === 1
-                   && (float) $v >= -5 && (float) $v <= 5;
+                   && (float) $v >= -4 && (float) $v <= 4;
+        case 'sg_laden_max':
+            return ctype_digit($v) && (int) $v >= 1 && (int) $v <= 24;
         case 'sg_14a_modus':
             return in_array($v, array('spar', 'standby'), true);
         case 'sg_14a_alter':
@@ -1256,7 +1288,175 @@ function wi_konfig_einlesen($roh)
     if ($gefunden === 0) {
         $mangel[] = wi_t('MELDUNG.SICH_LEER');
     }
+    // O4 (Durchgang 02.10.2026): dieselben Querpruefungen wie das Formular.
+    // Bis 3.1.5 wurde eine Sicherung mit Ladesollwert unter dem Normalwert
+    // uebernommen (Bericht oberflaeche, O4).
+    if (!$mangel) {
+        foreach (wi_sg_querpruefung($neu) as $q) {
+            $mangel[] = $q[1];
+        }
+    }
     return array($mangel ? null : $neu, $mangel);
+}
+
+/**
+ * O2/O4 (Durchgang 02.10.2026): die Querpruefungen der SG-Einstellungen an
+ * EINER Stelle - Formular, Zurueckspielen und die Warnung beim Sichern
+ * rufen sie. Rueckgabe: Liste aus array(Feld, Text). Leer = in Ordnung.
+ */
+function wi_sg_querpruefung($cfg)
+{
+    $aus = array();
+    if ((float) wi_cfg($cfg, 'sg_ww_laden', '55') < (float) wi_cfg($cfg, 'sg_ww_normal', '48')) {
+        $aus[] = array('sg_ww_laden', wi_t('MELDUNG.SG_SOLL_VERDREHT'));
+    }
+    if ((int) wi_cfg($cfg, 'sg_stunden', '4') > (int) wi_cfg($cfg, 'sg_horizont', '24')) {
+        $aus[] = array('sg_stunden', wi_t('MELDUNG.SG_STUNDEN'));
+    }
+    if (wi_cfg($cfg, 'sg_senden', '0') === '1' && wi_cfg($cfg, 'sg_ein', '0') !== '1') {
+        $aus[] = array('sg_senden', wi_t('MELDUNG.SG_SENDEN_OHNE_EIN'));
+    }
+    return $aus;
+}
+
+/**
+ * O5 (Durchgang 02.10.2026): einen Rechnernamen in eine IPv4-Adresse
+ * aufloesen. Rueckgabe '' wenn das nicht gelingt. Bis 3.1.5 ging ein
+ * Miniserver mit Rechnernamen ungeprueft in multicast_ip, und der Dienst
+ * sendete still an die Multicast-Gruppe (Bericht oberflaeche, O5).
+ */
+function wi_ipv4_aufloesen($name)
+{
+    $name = trim((string) $name);
+    if ($name === '' || preg_match('/^[A-Za-z0-9.-]{1,253}$/', $name) !== 1
+        || !function_exists('gethostbyname')) {
+        return '';
+    }
+    $ip = @gethostbyname($name);
+    return ($ip !== $name && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) ? $ip : '';
+}
+
+/**
+ * O1 (Durchgang 02.10.2026): die Einmalmeldung nach einem POST (PRG). Sie
+ * liegt im Datenordner des Plugins, 0600, und wird nur beim GET gelesen und
+ * dabei geloescht. Ohne LoxBerry-Wurzel (Pruefordner) im Temp-Ordner.
+ */
+function wi_einmal_datei()
+{
+    $p = wi_paths();
+    if ($p['home'] !== '') {
+        return $p['home'] . '/data/plugins/' . $p['plugin'] . '/einmalmeldung.json';
+    }
+    return sys_get_temp_dir() . '/wolf_einmal_' . md5(__DIR__) . '.json';
+}
+
+/** JSON unteilbar schreiben: Nebendatei, Rechte VOR dem Inhalt, Laenge pruefen, rename. */
+function wi_json_schreiben($datei, $daten, $rechte = 0600)
+{
+    $js = json_encode($daten);
+    if ($js === false) {
+        return false;
+    }
+    $ordner = dirname($datei);
+    if (!is_dir($ordner)) {
+        @mkdir($ordner, 0775, true);
+    }
+    $tmp = $datei . '.tmp.' . getmypid();
+    $fh = @fopen($tmp, 'c');
+    if (!$fh) {
+        return false;
+    }
+    @chmod($tmp, $rechte);
+    $ok = @ftruncate($fh, 0) && @fwrite($fh, $js) === strlen($js);
+    @fclose($fh);
+    if (!$ok || !@rename($tmp, $datei)) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
+}
+
+/**
+ * M3 (Durchgang 02.10.2026, Entscheidung 26): alte Praefixe vormerken.
+ *
+ * Bis 3.1.5 blieben nach einem Praefixwechsel alle retained Zustaende des
+ * alten Praefixes fuer immer im Broker, auch nach der Deinstallation
+ * (Bericht mqtt, Fall D/G). Die Liste liegt im KONFIGURATIONSordner -
+ * preupgrade.sh sichert ihn, postupgrade.sh spielt ihn zurueck; sie
+ * uebersteht also ein Upgrade. Je Zeile ein Praefix.
+ */
+function wi_praefixe_alt_datei()
+{
+    return dirname(wi_paths()['config']) . '/wolf_praefixe_alt';
+}
+
+function wi_praefixe_alt()
+{
+    $f = wi_praefixe_alt_datei();
+    $aus = array();
+    if (!is_file($f)) {
+        return $aus;
+    }
+    foreach (preg_split('/\R/', (string) @file_get_contents($f)) as $z) {
+        $z = trim($z);
+        if (preg_match('/^[a-z0-9_-]{1,32}$/', $z) === 1 && !in_array($z, $aus, true)) {
+            $aus[] = $z;
+        }
+    }
+    return $aus;
+}
+
+function wi_praefixe_alt_schreiben($liste)
+{
+    $f = wi_praefixe_alt_datei();
+    if (!$liste) {
+        return is_file($f) ? @unlink($f) : true;
+    }
+    $txt = implode("\n", $liste) . "\n";
+    $tmp = $f . '.tmp.' . getmypid();
+    if (@file_put_contents($tmp, $txt) !== strlen($txt)) {
+        @unlink($tmp);
+        return false;
+    }
+    @chmod($tmp, 0644);
+    if (!@rename($tmp, $f)) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
+}
+
+function wi_praefix_vormerken($alt)
+{
+    $l = wi_praefixe_alt();
+    if (preg_match('/^[a-z0-9_-]{1,32}$/', (string) $alt) !== 1 || in_array($alt, $l, true)) {
+        return true;
+    }
+    $l[] = $alt;
+    return wi_praefixe_alt_schreiben($l);
+}
+
+function wi_praefix_vergessen($p)
+{
+    $l = wi_praefixe_alt();
+    $neu = array_values(array_filter($l, function ($x) use ($p) { return $x !== $p; }));
+    return count($neu) === count($l) ? true : wi_praefixe_alt_schreiben($neu);
+}
+
+/** SIGHUP an das laufende Auswertungsmodul (M6: danach folgt der Vollversand). */
+function wi_dienst_hup()
+{
+    $pid = wi_ism8i_pid();
+    if (!$pid) {
+        return false;
+    }
+    if (function_exists('posix_kill') && @posix_kill((int) $pid, 1)) {
+        return true;
+    }
+    $aus = array();
+    $rc = 1;
+    @exec('kill -HUP ' . (int) $pid . ' 2>&1', $aus, $rc);
+    return $rc === 0;
 }
 
 /** Lokale IP des LoxBerry. */
@@ -1500,7 +1700,10 @@ function wi_mqtt_sitzung(array $filter, array $senden = array())
         $nutz .= $zk($z['user']);
         if ($z['pass'] !== '') { $nutz .= $zk($z['pass']); }
     }
-    if (@fwrite($s, chr(0x10) . $laenge(strlen($kopf . $nutz)) . $kopf . $nutz) !== false) {
+    /* Kette, Bauart B (Durchgang 02.10.2026): Erfolg heisst, das GANZE
+     * CONNECT-Paket ist geschrieben - eine kurze Schreibung ist keiner. */
+    $wi_con = chr(0x10) . $laenge(strlen($kopf . $nutz)) . $kopf . $nutz;
+    if (@fwrite($s, $wi_con) === strlen($wi_con)) {
         $ack = $paket();
         if ($ack !== null && ($ack[0] >> 4) === 2 && strlen($ack[1]) >= 2 && ord($ack[1][1]) === 0) {
             foreach ($senden as $p) {
@@ -1549,6 +1752,45 @@ function wi_mqtt_sitzung(array $filter, array $senden = array())
     return $aus;
 }
 
+/**
+ * O11 (Durchgang 02.10.2026): die festen Themen des Dienstes (ohne Praefix)
+ * mit Retain-Merkmal und Sprachschluessel der Bedeutung. Aus dieser Liste
+ * entsteht die Themenliste im Reiter MQTT; der Reiter Test vergleicht sie
+ * mit den Themen, die bin/wolf_ism8i.pl woertlich sendet.
+ */
+function wi_mqtt_feste_themen()
+{
+    return array(
+        'online'      => array(1, 'MQTT.B_ONLINE'),
+        'zeitstempel' => array(0, 'MQTT.B_ZEIT'),
+        'zaehler'     => array(0, 'MQTT.B_ZAEHLER'),
+    );
+}
+
+/**
+ * O6 (Durchgang 02.10.2026, X-3): welche Einstellungen das Zurueckspielen
+ * der eigenen Sicherung abweisen wuerde - nur die SCHLUESSEL, nie die Werte.
+ * Leer = die Sicherung laesst sich zurueckspielen.
+ */
+function wi_sicherung_maengel($cfg)
+{
+    $aus = array();
+    $voll = array();
+    foreach (wi_defaults() as $k => $v) {
+        $w = isset($cfg[$k]) && $cfg[$k] !== '' ? (string) $cfg[$k] : $v;
+        $voll[$k] = $w;
+        if (!wi_wert_taugt($k, $w)) {
+            $aus[] = $k;
+        }
+    }
+    if (!$aus) {
+        foreach (wi_sg_querpruefung($voll) as $q) {
+            $aus[] = $q[0];
+        }
+    }
+    return array_values(array_unique($aus));
+}
+
 /** Die Themen des SG-Moduls (ohne Praefix). Seit 3.1.4 alle fluechtig. */
 function wi_sg_mqtt_themen()
 {
@@ -1572,36 +1814,101 @@ function wi_sg_mqtt_themen()
  */
 function wi_mqtt_leeren($cfg)
 {
+    /* M3 (Durchgang 02.10.2026): ueber das eingestellte UND alle vorgemerkten
+     * alten Praefixe. Ein altes Praefix, das der Broker als leer bestaetigt,
+     * faellt aus der Liste. */
     $pre = wi_cfg($cfg, 'praefix', 'wolf_ng');
+    $rc = 0;
+    $zeilen = array();
+    foreach (array_values(array_unique(array_merge(array($pre), wi_praefixe_alt()))) as $p) {
+        $e = wi_mqtt_leeren_praefix($cfg, $p, array());
+        if ($e['lage'] !== 'ok') {
+            $rc = 1;
+            $zeilen[] = '<WARNING> MQTT: der Broker liess sich nicht befragen (Brokerhost, '
+                . 'Brokerport, Zugangsdaten in general.json, Verbindung, Anmeldung oder Abonnement '
+                . 'abgelehnt) - unter ' . $p . '/ kann noch Zurueckbehaltenes stehen. Von Hand: '
+                . 'mosquitto_pub -r -n -t <thema>';
+        } elseif ($e['rest']) {
+            $rc = 1;
+            $zeilen[] = '<WARNING> MQTT: nach drei Runden stehen noch ' . count($e['rest'])
+                . ' zurueckbehaltene Themen im Broker, zum Beispiel ' . $e['rest'][0]
+                . '. Von Hand: mosquitto_pub -r -n -t <thema>';
+        } else {
+            $zeilen[] = '<OK> MQTT: unter ' . $p . '/ steht kein zurueckbehaltenes Thema '
+                . 'der Linie mehr im Broker (' . $e['geleert'] . ' geleert, vom Broker bestaetigt).';
+            if ($p !== $pre) {
+                wi_praefix_vergessen($p);
+            }
+        }
+    }
+    return array($rc, $zeilen);
+}
+
+/** Alle Themen, die die Linie unter diesem Praefix je gesendet haben kann. */
+function wi_mqtt_bekannt($cfg, $pre)
+{
+    $c = $cfg;
+    $c['praefix'] = $pre;
     $bekannt = array();
-    foreach (wi_alle_themen($cfg) as $t) { $bekannt[$t] = true; }
+    foreach (wi_alle_themen($c) as $t) { $bekannt[$t] = true; }
     foreach (wi_sg_mqtt_themen() as $t) { $bekannt[$pre . '/' . $t] = true; }
+    return $bekannt;
+}
+
+/**
+ * M6 (Durchgang 02.10.2026): was die LAUFENDE Konfiguration retained sendet
+ * und deshalb beim Aufraeumen stehen bleibt - online und die Zustaende der
+ * eingestellten Firmware unter dem eingestellten Praefix. Mit MQTT aus
+ * nichts. Rueckgabe: thema => true.
+ */
+function wi_mqtt_behalten($cfg)
+{
+    $aus = array();
+    if (wi_cfg($cfg, 'mqtt', '0') !== '1') {
+        return $aus;
+    }
+    $pre = wi_cfg($cfg, 'praefix', 'wolf_ng');
+    $aus[$pre . '/online'] = true;
+    foreach (wi_datenpunkte(wi_cfg($cfg, 'fw_version', '1.8')) as $d) {
+        if (strpos($d['io'], 'Out') === false || in_array($d['dpt'], array('DPT_TimeOfDay', 'DPT_Date'), true)) {
+            continue;
+        }
+        if (wi_ist_zustand($d['dpt'], $d['io'])) {
+            $aus[wi_topic_pre($pre, $d)] = true;
+        }
+    }
+    return $aus;
+}
+
+/**
+ * Zurueckbehaltene Themen der Linie unter EINEM Praefix am Broker leeren, mit
+ * Nachlesen in derselben Verbindung, hoechstens drei Runden. $behalten nennt
+ * Themen, die stehen bleiben (M6). Rueckgabe array('lage', 'geleert', 'rest').
+ */
+function wi_mqtt_leeren_praefix($cfg, $pre, $behalten)
+{
+    $bekannt = wi_mqtt_bekannt($cfg, $pre);
     $filter = array($pre . '/#');
     $senden = array();
     $geleert = 0;
+    $rest = array();
     for ($runde = 1; $runde <= 3; $runde++) {
         $f = wi_mqtt_sitzung($filter, $senden);
         if ($f['lage'] !== 'ok') {
-            return array(1, array('<WARNING> MQTT: der Broker liess sich nicht befragen (Brokerhost, '
-                . 'Brokerport, Zugangsdaten in general.json, Verbindung, Anmeldung oder Abonnement '
-                . 'abgelehnt) - unter ' . $pre . '/ kann noch Zurueckbehaltenes stehen. Von Hand: '
-                . 'mosquitto_pub -r -n -t <thema>'));
+            return array('lage' => 'unbekannt', 'geleert' => $geleert, 'rest' => array());
         }
         $rest = array();
         foreach (array_keys($f['belegt']) as $t) {
-            if (isset($bekannt[$t])) { $rest[] = $t; }
+            if (isset($bekannt[$t]) && !isset($behalten[$t])) { $rest[] = $t; }
         }
         if (!$rest) {
-            return array(0, array('<OK> MQTT: unter ' . $pre . '/ steht kein zurueckbehaltenes Thema '
-                . 'der Linie mehr im Broker (' . $geleert . ' geleert, vom Broker bestaetigt).'));
+            return array('lage' => 'ok', 'geleert' => $geleert, 'rest' => array());
         }
         $senden = array();
         foreach ($rest as $t) { $senden[] = array($t, '', true); }
         $geleert += ($runde === 1) ? count($rest) : 0;
     }
-    return array(1, array('<WARNING> MQTT: nach drei Runden stehen noch ' . count($rest)
-        . ' zurueckbehaltene Themen im Broker, zum Beispiel ' . $rest[0]
-        . '. Von Hand: mosquitto_pub -r -n -t <thema>'));
+    return array('lage' => 'ok', 'geleert' => $geleert, 'rest' => $rest);
 }
 
 /**
@@ -1908,6 +2215,23 @@ function wi_grenzen($dpt, $einheit)
     return array((string) $min, (string) $max, $unit, $analog);
 }
 
+/**
+ * O12 (Durchgang 02.10.2026): der Wertplatzhalter eines ANALOGEN
+ * Ausgangsbefehls, aus denselben Nachkommastellen wie die Einheit in
+ * wi_grenzen(): <v.1> bei einer Nachkommastelle (Temperaturen, Korrektur
+ * und Sparfaktor in 0,5-K-Schritten), <v.2> bei zweien, sonst <v>.
+ * Bis 3.1.5 stand in tcp_out "\v" - die Befehlserkennung virtueller
+ * EINGAENGE, die Loxone in einem Ausgang nicht ersetzt; der Dienst wies den
+ * Text ab (Bericht oberflaeche, O12). mqtt_out schrieb <v.0> und schnitt
+ * damit die 0,5-K-Schritte ab.
+ */
+function wi_platzhalter($dpt)
+{
+    $g = array('DPT_Value_Temp' => 1, 'DPT_Value_Tempd' => 1, 'DPT_Value_Pres' => 1,
+               'DPT_Power' => 1, 'DPT_Value_Volume_Flow' => 1, 'DPT_FlowRate_m3/h' => 2);
+    return isset($g[$dpt]) ? '<v.' . $g[$dpt] . '>' : '<v>';
+}
+
 /** Ein Attribut nur schreiben, wenn es einen Wert hat. */
 function wi_attr($name, $wert)
 {
@@ -2143,7 +2467,7 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
                 ? array(
                     'title'  => $d['geraet'] . ' ' . $d['name'] . ' setzen',
                     'method' => 'get',
-                    'on'     => $nr . ';\\v',
+                    'on'     => $nr . ';' . wi_platzhalter($d['dpt']),
                     'analog' => true,
                   )
                 : array(
@@ -2222,18 +2546,24 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
             $titel = str_replace('/', '_', $thema) . '_setzen';
             $cmds[] = $analog
                 ? array(
-                    // <v.0> ist der Wertplatzhalter eines Analogbefehls; bis
-                    // 3.0.7 stand hier <v>.
+                    // O12: Platzhalter je Typ (wi_platzhalter), nicht <v.0>.
+                    // M5 (Durchgang 02.10.2026): publish statt retain. Der
+                    // Befehl lag bis 3.1.5 retained auf DEMSELBEN Thema, auf
+                    // dem der Dienst den Istwert meldet; nach einem Neustart
+                    // von Gateway oder Miniserver las Loxone den einst
+                    // befohlenen Wert als aktuellen (Bericht mqtt, Fall C).
+                    // Der Dienst fuehrt zurueckbehaltene Nachrichten ohnehin
+                    // nie aus.
                     'title'   => $titel,
                     'comment' => $d['geraet'] . ' ' . $d['name'],
-                    'on'      => 'retain ' . $thema . ' <v.0>',
+                    'on'      => 'publish ' . $thema . ' ' . wi_platzhalter($d['dpt']),
                     'analog'  => true,
                   )
                 : array(
                     'title'   => $titel,
                     'comment' => $d['geraet'] . ' ' . $d['name'],
-                    'on'      => 'retain ' . $thema . ' 1',
-                    'off'     => 'retain ' . $thema . ' 0',
+                    'on'      => 'publish ' . $thema . ' 1',
+                    'off'     => 'publish ' . $thema . ' 0',
                     'analog'  => false,
                   );
         }

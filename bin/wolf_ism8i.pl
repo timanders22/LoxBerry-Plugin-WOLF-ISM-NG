@@ -37,6 +37,10 @@ use Encode 'encode';
 # Mantisse) exakt darstellbar sind. Genauigkeit geht also keine verloren.
 
 use IO::Socket::INET;
+# Durchgang 02.10.2026: Socket fuer SO_KEEPALIVE (C5), Time::HiRes fuer die
+# kurze Frist am Befehls-Port (C10). Beide sind Kernmodule von Perl.
+use Socket qw(SOL_SOCKET SO_KEEPALIVE IPPROTO_TCP inet_aton inet_ntoa);
+use Time::HiRes ();
 use IO::Socket::Multicast; #   apt install libio-socket-multicast-perl
 use Data::Dumper qw(Dumper);
 use HTML::Entities;
@@ -55,7 +59,7 @@ sub send_IGMPmessage($);
 sub start_WolfServer;
 sub start_CommandServer;
 sub start_event_loop($$);
-sub read_command_messages($$);
+sub read_command_messages($$;$);
 sub read_wolf_messages($);
 sub createRequest($$);
 sub create_answer($);
@@ -74,7 +78,7 @@ sub js_str;
 sub loadDatenpunkte;
 sub writeDatenpunkteToLog;
 sub getDatenpunkt($$);
-sub ist_zustand($);
+sub ist_zustand($;$);
 sub getCsvResult($$);
 sub parseInput($);
 sub pdt_knx_float($);
@@ -98,6 +102,15 @@ our @ZUSTAND_TYPEN = (
     "DPT_HVACMode", "DPT_DHWMode", "DPT_HVACContrMode",
     "DPT_Value_1_Ucount", "DPT_Value_2_Ucount",
 );
+# M7 (Durchgang 02.10.2026, Regeln/07: "zuletzt gueltiger Sollwert" ist ein
+# Zustand): ein SCHREIBBARER Datenpunkt (Spalte Out/In) traegt einen Sollwert
+# oder eine Vorgabe und geht deshalb retained hinaus, gleich welchen Typs.
+# In Firmware 1.9 betrifft das 22 Datenpunkte, die bis 3.1.5 fluechtig
+# hinausgingen (Warmwassersolltemperatur, Sollwertkorrektur, Sparfaktor,
+# Kesselsolltemperaturvorgabe, Leistungsvorgabe je 4, Sammlersolltemperatur-
+# und Gesamtmodulationsgradvorgabe). wi_ist_zustand() in wi_lib.php fuehrt
+# dieselbe Regel, der Reiter Test vergleicht diesen Schalter mit ihr.
+our $ZUSTAND_SCHREIBBAR = 1;
 
 # Unter welchem Praefix das laufende Abonnement und der letzte Wille stehen.
 # Bis 3.0.10 gab es das nicht: connect_MQTT() lief genau einmal, und nach
@@ -138,6 +151,47 @@ my $udp_fehler = 0;
 my $verworfen = 0;     # Telegramme ohne verwertbaren Wert (B24)
 my $online_reset_timer = -1;
 
+# --- Durchgang 02.10.2026 ------------------------------------------------
+# C5: Gesendet wird nur an eine ISM8-Verbindung, die schon ein gueltiges
+# Telegramm geliefert hat. Bis 3.1.5 wurde JEDE neue Verbindung sofort zum
+# Sendeziel; eine stille Zweitverbindung (Portscan, halboffene Altverbindung)
+# bekam die Befehle, und der Befehls-Port meldete trotzdem OK (gemessen,
+# Bericht code, Befund 6: Telegramme an das echte ISM8 0, an die stille 1).
+my %ism8_gueltig;          # fileno => 1, sobald ein gueltiges Telegramm kam
+my %ism8_zeit;             # fileno => Zeit der Annahme
+my %ism8_adresse;          # fileno => Gegenstelle
+use constant STILL_FRIST      => 60;    # s ohne gueltiges Telegramm -> abraeumen
+use constant GLEICHWERT_FRIST => 60;    # s, X-7 (Entscheidung 19)
+use constant BEFEHL_FRIST     => 0.2;   # s nach dem letzten Byte (C10)
+use constant VOLLVERSAND_TAKT => 1800;  # s, voller Satz (M2, Regeln/07)
+my %cmd_puffer;            # C10: angesammelte Bytes je Befehlsverbindung
+my %cmd_letztes_byte;      # C10: Zeitpunkt des letzten Bytes
+my %befehl_letzt;          # C6: Datenpunkt => [Telegramm, Zeit] des zuletzt gesendeten
+my $parse_grund = '';      # C8: warum parseInput zuletzt abwies ('BEREICH' oder '')
+my %erlaubte_absender;     # C7: Adresse => Herkunft
+my %fremde_absender;       # C7: Adresse => [zuletzt gemeldet, seither abgewiesen]
+my $vollversand_faellig = 0;      # M2/M3/M6
+my $vollversand_letzt = time;     # M2
+
+# C8: Plausibilitaetsbereiche je Datenpunkt, GELESEN aus der
+# ISM8i-Betriebsanleitung (Ab FW 1.90, 10/2024, "Wertebereiche der
+# Inputvariablen", S. 46-47). Kessel- und Sammlersolltemperaturvorgabe
+# gelten dort zwischen TKmin (HG21) und TKmax (HG22) des Geraets; die hier
+# stehenden 20 und 90 Grad sind die aeusseren Einstellgrenzen dieser beiden
+# Parameter in den Fachkraft-Anleitungen von CGB-2, CGB-2-75/100 und TGB-2
+# (HG21 20..90, HG22 50..90). Was ausserhalb liegt, wird ABGEWIESEN, nicht
+# geklemmt: ein Tippfehler in Loxone (600 statt 60,0) ging bis 3.1.5 als
+# Warmwassersoll an die Heizung (Bericht code, Befund 9).
+my %PLAUSIBEL = (
+    'Warmwassersolltemperatur'     => [20, 80],
+    'Sollwertkorrektur'            => [-4, 4],
+    'Sparfaktor'                   => [0, 10],
+    'Kesselsolltemperaturvorgabe'  => [20, 90],
+    'Sammlersolltemperaturvorgabe' => [20, 90],
+    'Programmwahl Heizkreis'       => [0, 3],
+    'Programmwahl Mischer'         => [0, 3],
+);
+
 # --- Zustandsabbild und Zaehler (V1, V3, V4) --------------------------
 # Der Dienst haelt den letzten Wert je Datenpunkt ohnehin im Speicher; bis
 # 3.0.8 kam er nur nicht nach draussen. Die Oberflaeche hatte deshalb keinen
@@ -155,6 +209,7 @@ my %zaehler = (
     udp_fehler   => 0,
     befehle_ok   => 0,
     befehle_weg  => 0,
+    befehle_gleich => 0,   # C6: gleicher Sollwert binnen 60 s, nicht gesendet
     verbindungen => 0,
 );
 my $unbekannt_min;        # kleinste und groesste unbekannte Kennung -
@@ -216,9 +271,20 @@ writeDatenpunkteToLog();
 
 start_IGMPserver();
 
+absender_laden();
+
+# I2 (Durchgang 02.10.2026): ERST binden, DANN beim Broker anmelden. Bis
+# 3.1.5 meldete sich das Modul mit dem Letzten Willen an und band erst
+# danach den ISM8-Port. Ein zweites Modul (doppelter Waechterlauf) starb am
+# belegten Port, der Broker setzte seinen Letzten Willen "online 0", und
+# Loxone sah ein Flackern (Bericht installer, Befund I2, lauf3). Jetzt stirbt
+# ein solches Modul, bevor es den Broker je gesehen hat.
+my $wi_ism8_horcher   = start_WolfServer();
+my $wi_befehl_horcher = start_CommandServer();
+
 connect_MQTT();
 
-start_event_loop(start_WolfServer(), start_CommandServer());
+start_event_loop($wi_ism8_horcher, $wi_befehl_horcher);
 
 ## STDOUT/STDERR wiederherstellen
 #close $log_fh;
@@ -288,10 +354,70 @@ sub publish_MQTT($$$;$)
     $mqtt_values{$topic} = [$id, $value, $retain];
     LOGDEB(encode('UTF-8', "Saving state for topic $topic: $id: $value"));
     if ($mqtt) {
-        LOGINF(encode('UTF-8', "publish Data: $id on MQTT topic $topic: $value"
-                              . ($retain ? " (retained)" : "")));
         if ($retain) { delete $altlast{thema_schluessel($topic)}; $mqtt->retain($topic, $value); }
         else         { fluechtig_senden($topic, $value); }
+        # M2 (Durchgang 02.10.2026): "(retained)" steht nur noch da, wenn die
+        # Bibliothek danach eine Verbindung haelt. Bis 3.1.5 stand die Zeile
+        # VOR dem Senden - auch waehrend eines Broker-Ausfalls (Bericht mqtt,
+        # Fall B). Der Wert bleibt in %mqtt_values und geht mit dem
+        # Vollversand nach der Neuverbindung hinaus.
+        if (mqtt_signatur() ne '') {
+            LOGINF(encode('UTF-8', "publish Data: $id on MQTT topic $topic: $value"
+                                  . ($retain ? " (retained)" : "")));
+        } else {
+            LOGINF(encode('UTF-8', "MQTT nicht gesendet (keine Verbindung zum Broker): $topic: $value"
+                                  . " - folgt mit dem Vollversand nach der Neuverbindung."));
+        }
+    }
+}
+
+sub vollversand
+# M2/M3/M6 (Durchgang 02.10.2026): alle Werte aus %mqtt_values mit ihrem
+# Retain-Merkmal neu senden - nach jeder (Neu-)Verbindung, nach SIGHUP und
+# alle 30 Minuten (Regeln/07: Vollversand nach jeder Verbindung, ein voller
+# Satz im groben Takt). Bis 3.1.5 ging ein Zustandswechsel waehrend eines
+# Broker-Ausfalls auf Dauer verloren (Bericht mqtt, Befund 2: "Stoerung"
+# blieb true), und nach einem Broker-Neustart ohne Persistenz fehlten alle
+# Zustaende, bis sich der Wert aenderte.
+{
+    my $grund = shift;
+    $vollversand_letzt = time;
+    $vollversand_faellig = 0;
+    return unless $mqtt and $hash{mqtt} eq '1';
+    my $n = 0;
+    for my $t (sort keys %mqtt_values) {
+        my ($id, $w, $r) = @{ $mqtt_values{$t} };
+        next unless defined $w;
+        if ($r) { delete $altlast{thema_schluessel($t)}; $mqtt->retain($t, $w); }
+        else    { fluechtig_senden($t, $w); }
+        $n++;
+    }
+    return unless $n;
+    if (mqtt_signatur() ne '') {
+        LOGINF("Vollversand ($grund): $n Themen gesendet.");
+    } else {
+        LOGWARN("Vollversand ($grund): keine Verbindung zum Broker - $n Themen nicht gesendet.");
+    }
+}
+
+sub mqtt_trennen
+# Sauber trennen: DISCONNECT, damit der Broker den Letzten Willen NICHT
+# setzt (M1, M3, M4). Ob $mqtt = undef allein ein DISCONNECT schickt, ist
+# am echten Net::MQTT::Simple nicht gemessen (Bericht mqtt, "nicht
+# pruefbar"). Fuehrt die Bibliothek disconnect(), wird es benutzt; sonst
+# geht das zwei Byte lange DISCONNECT-Paket (MQTT 3.1.1, 3.14) von Hand
+# auf den Socket, den die Bibliothek in $mqtt->{socket} haelt.
+{
+    return unless $mqtt and ref($mqtt);
+    if ($mqtt->can('disconnect')) {
+        eval { $mqtt->disconnect(); 1; } or LOGWARN("MQTT: Trennen misslungen: $@");
+        return;
+    }
+    my $s = (ref($mqtt) =~ /HASH|::/ and exists $mqtt->{socket}) ? $mqtt->{socket} : undef;
+    if ($s) {
+        eval { syswrite($s, chr(0xE0) . chr(0)); close($s); 1; }
+            or LOGWARN("MQTT: DISCONNECT liess sich nicht senden: $@");
+        $mqtt->{socket} = undef;
     }
 }
 
@@ -308,7 +434,7 @@ sub fluechtig_senden
         $geleert{thema_schluessel($topic)} = 1;
         $mqtt->retain($topic, '');
     }
-    $mqtt->publish($topic, $value);
+    return $mqtt->publish($topic, $value);
 }
 
 sub thema_schluessel
@@ -340,10 +466,27 @@ sub neuverbindung_pruefen
     return unless $mqtt and $hash{mqtt} eq '1';
     my $sig = mqtt_signatur();
     return if $sig eq '' or $sig eq $mqtt_sig;
-    LOGINF("MQTT-Verbindung neu aufgebaut - online wird neu angesagt ("
-         . ($online_state ? 1 : 0) . ").") if $mqtt_sig ne '';
+    if ($mqtt_sig ne '') {
+        # M1 (Durchgang 02.10.2026): die BIBLIOTHEK hat nach einem Abriss
+        # selbst neu verbunden. Net::MQTT::Simple 1.32-3LB erneuert dabei die
+        # Abos nicht (Regeln/07, Gedaechtnis "Gateway: Abos nach Reconnect
+        # weg"): Schaltbefehle aus Loxone kamen bis zum naechsten Dienststart
+        # nicht mehr an (Bericht mqtt, Fall A: 0 SUBSCRIBE, Befehl verloren).
+        # Abhilfe ueber die oeffentliche Schnittstelle, wie im SIGHUP-Zweig:
+        # sauber trennen, frisches Objekt, das mit Letztem Willen neu
+        # verbindet und abonniert. Die frische Verbindung gilt beim
+        # naechsten Aufruf als neu - dort folgen online und der Vollversand.
+        LOGINF("MQTT-Verbindung von der Bibliothek neu aufgebaut - das Abonnement "
+             . "wird ueber eine frische Verbindung erneuert.");
+        mqtt_trennen();
+        $mqtt = undef;
+        $mqtt_sig = '';
+        connect_MQTT();
+        return;
+    }
     $mqtt_sig = $sig;
     online_ansagen();
+    vollversand('neue Verbindung zum Broker');
 }
 
 sub online_ansagen
@@ -357,9 +500,10 @@ sub online_ansagen
     $online_gesendet = 1;
 }
 
-sub ist_zustand($)
+sub ist_zustand($;$)
 # Traegt dieser KNX-Datenpunkttyp einen ZUSTAND (retained) oder einen
-# MESSWERT mit Zeitbezug (nicht retained)?
+# MESSWERT mit Zeitbezug (nicht retained)? Der zweite Parameter ist die
+# Spalte Out/In: ein schreibbarer Datenpunkt ist immer ein Zustand (M7).
 #
 # Zustaende: Schalter, Freigaben, Betriebsarten und die beiden Zaehltypen -
 # ihr letzter Wert bleibt richtig, bis ein neuer kommt, und Loxone soll ihn
@@ -368,15 +512,22 @@ sub ist_zustand($)
 # Energie - ein alter Wert sieht dort aus wie ein frischer.
 {
     my $typ = defined $_[0] ? $_[0] : '';
+    my $io  = defined $_[1] ? $_[1] : '';
     return 1 if grep { $_ eq $typ } @ZUSTAND_TYPEN;
+    return 1 if $ZUSTAND_SCHREIBBAR and $io =~ m{/In$};
     return 0;
 }
 
 sub received_MQTT
 {
     my ($topic, $message, $retained) = @_;
-    LOGDEB(encode('UTF-8', "incoming MQTT message: $topic: $message retained: $retained"));
+    # M4 (Durchgang 02.10.2026): mit "MQTT aus" wirkt kein Befehl ueber MQTT
+    # mehr. Bis 3.1.5 blieb der Dienst verbunden und schrieb weiter an die
+    # Heizung, was ueber MQTT kam (Bericht mqtt, Fall E1).
+    return unless $hash{mqtt} eq '1';
     $message = '' unless defined $message;
+    LOGDEB(encode('UTF-8', "incoming MQTT message: $topic: $message retained: "
+                          . (defined $retained ? $retained : '')));
     # Das Echo der eigenen Loeschung (fluechtig_senden) ist kein Befehl und
     # darf den gemerkten Stand nicht wegwerfen.
     if ($message eq '' and delete $geleert{thema_schluessel($topic)}) {
@@ -469,6 +620,63 @@ sub getMQTTFriendly($)
     }
 
     return $working_string;
+}
+
+sub online_jetzt
+# C5: online heisst "eine Verbindung, die schon ein gueltiges Telegramm
+# geliefert hat, ist offen" - nicht "irgendeine Verbindung ist offen".
+{
+    return scalar(grep { $ism8_gueltig{$_} } keys %ism8_clients) ? 1 : 0;
+}
+
+sub keepalive_setzen
+# C5 (Durchgang 02.10.2026): SO_KEEPALIVE mit 60/10/3 auf jede angenommene
+# ISM8-Verbindung. Ein ISM8, das stromlos wird, schliesst seine Verbindung
+# nicht; recv lieferte nie die Laenge 0, und online blieb 1 retained (Bericht
+# mqtt, Befund 10). Mit Keepalive meldet der Kern eine tote Gegenstelle nach
+# rund 60 + 3 x 10 s als Fehler, und die Verbindung wird abgebaut.
+{
+    my $s = shift;
+    if (!setsockopt($s, SOL_SOCKET, SO_KEEPALIVE, 1)) {
+        LOGWARN("SO_KEEPALIVE liess sich nicht setzen: $!");
+        return;
+    }
+    for my $p (['TCP_KEEPIDLE', 60], ['TCP_KEEPINTVL', 10], ['TCP_KEEPCNT', 3]) {
+        my $k = eval { no strict 'refs'; &{"Socket::$p->[0]"}(); };
+        if (!defined $k) {
+            LOGWARN("$p->[0] kennt dieses Perl nicht - es gilt die Vorgabe des Systems.");
+            next;
+        }
+        setsockopt($s, IPPROTO_TCP, $k, $p->[1])
+            or LOGWARN("$p->[0] liess sich nicht auf $p->[1] setzen: $!");
+    }
+}
+
+sub ism8_abbauen
+# Eine ISM8-Verbindung abbauen und das Sendeziel nachfuehren (C5).
+{
+    my ($fn, $grund) = @_;
+    my $s = $ism8_clients{$fn};
+    my $adr = defined $ism8_adresse{$fn} ? $ism8_adresse{$fn} : '?';
+    LOGINF("Verbindung zu $adr beendet ($grund).");
+    if (defined $s) {
+        eval { $ereignis_auswahl->remove($s) if $ereignis_auswahl; shutdown($s, 2); close($s); 1; };
+    }
+    delete $ism8_clients{$fn};
+    delete $ism8_puffer{$fn};
+    delete $ism8_gueltig{$fn};
+    delete $ism8_zeit{$fn};
+    delete $ism8_adresse{$fn};
+    if (defined $wolf_client and (fileno($wolf_client) // -2) == $fn) {
+        # Zum Senden die naechste Verbindung mit gueltigem Telegramm nehmen.
+        my ($erste) = map { $ism8_clients{$_} } grep { $ism8_gueltig{$_} } sort keys %ism8_clients;
+        $wolf_client = $erste;
+    }
+    if (defined $wolf_client and !exists $ism8_clients{fileno($wolf_client) // -2}) {
+        $wolf_client = undef;
+    }
+    send_OnlineState(online_jetzt());
+    $zustand_schmutzig = 1;   # das Zustandsabbild zeigt online und die offenen Verbindungen
 }
 
 sub send_OnlineState($)
@@ -605,6 +813,9 @@ sub createPullRequest()
 
 sub sendPullRequest
 {
+    # Seit C5 kann das Sendeziel zwischen Zeitgeber und Ablauf entfallen
+    # (Verbindung beendet) - dann gibt es nichts zu senden.
+    return unless defined $wolf_client;
     LOGINF("Send Pull Request");
     my $pull_request = createPullRequest();
     if (length($pull_request) > 0) { $wolf_client->send($pull_request); }
@@ -755,11 +966,13 @@ sub start_event_loop($$) {
         # dauerhaft belegt. Zehn Sekunden sind reichlich fuer eine Zeile.
         for my $fn (keys %cmd_zeit) {
             next if $jetzt - $cmd_zeit{$fn} < 10;
+            next if exists $cmd_letztes_byte{$fn};   # C10: wird in der Hauptschleife ausgewertet
             my $s = $cmd_clients{$fn};
             LOGWARN("Befehlsverbindung ohne Befehl nach 10 s - abgeraeumt.");
             eval { $ereignis_auswahl->remove($s); shutdown($s, 2); close($s); };
             delete $cmd_clients{$fn};
             delete $cmd_zeit{$fn};
+            delete $cmd_puffer{$fn};
         }
 
         # --- V1: Zustandsabbild, hoechstens alle zwei Sekunden ------------
@@ -802,8 +1015,23 @@ sub start_event_loop($$) {
                         or LOGWARN("Abbestellen von $mqtt_praefix/# misslungen: $@");
                 }
                 my $alt_verbunden = $mqtt_praefix;
+                # M3 (Durchgang 02.10.2026): die Werte nicht wegwerfen, sondern
+                # unter das neue Praefix umschluesseln - der Vollversand der
+                # neuen Verbindung bringt sie sofort dorthin. Bis 3.1.5 standen
+                # die Zustaende unter dem neuen Praefix erst nach einem
+                # Wertwechsel (Bericht mqtt, Fall D3). War MQTT vorher aus,
+                # ist der Stand alt und wird verworfen.
+                my %wi_neu_werte;
+                if ($alt_mqtt eq '1' and $alt_verbunden ne '') {
+                    for my $t (keys %mqtt_values) {
+                        next unless index($t, "$alt_verbunden/") == 0;
+                        my $nt = $hash{praefix} . substr($t, length($alt_verbunden));
+                        $wi_neu_werte{$nt} = $mqtt_values{$t};
+                    }
+                }
+                mqtt_trennen();
                 $mqtt = undef;
-                %mqtt_values = ();   # sonst gilt der alte Stand fuer neue Themen
+                %mqtt_values = %wi_neu_werte;
                 %altlast = ();
                 %geleert = ();
                 $mqtt_sig = '';
@@ -816,16 +1044,46 @@ sub start_event_loop($$) {
                     $mqtt->retain("$alt_verbunden/online", '');
                 }
             }
+            if ($hash{mqtt} ne '1' and $mqtt) {
+                # M4 (Durchgang 02.10.2026): MQTT aus raeumt ab und trennt
+                # sauber. Bis 3.1.5 blieb die Verbindung offen, retained
+                # Zustaende und online standen weiter im Broker, und der Dienst
+                # fuehrte Befehle ueber MQTT weiter aus (Bericht mqtt, Fall E).
+                # Die Oberflaeche leert danach zusaetzlich am Broker mit
+                # Nachlesen (wi_mqtt_leeren), auch was dieser Lauf nicht kennt.
+                my $n = 0;
+                for my $t (sort keys %mqtt_values) {
+                    next unless $mqtt_values{$t}[2];
+                    $mqtt->retain($t, '');
+                    $n++;
+                }
+                $mqtt->retain("$mqtt_praefix/online", '') if $mqtt_praefix ne '';
+                LOGINF("MQTT ausgeschaltet: $n zurueckbehaltene Zustaende und "
+                     . "$mqtt_praefix/online geleert, Verbindung zum Broker sauber getrennt.");
+                mqtt_trennen();
+                $mqtt = undef;
+                $mqtt_sig = '';
+                $mqtt_praefix = '';
+                %mqtt_values = ();
+                %altlast = ();
+                %geleert = ();
+            }
+            absender_laden();
             if ($hash{port} ne $alt_port or $hash{inport} ne $alt_in
                 or $hash{mcport} ne $alt_mcp) {
                 LOGWARN("Ein Port hat sich geaendert - dafuer ist ein Neustart "
                       . "noetig. Die uebrigen Aenderungen sind uebernommen.");
             }
             %letzter_wert = ();   # damit alle Werte einmal neu hinausgehen
+            # M3/M6: nach jedem SIGHUP ein Vollversand - nach einem
+            # Praefixwechsel, nach "Retained-Themen wirklich loeschen" und
+            # nach jeder anderen Uebernahme.
+            $vollversand_faellig = 1;
         }
 
         LOGDEB("Warte auf neue ISM8 Daten");
-        my @read = $read_select->can_read(1);
+        # C10: steht ein angefangener Befehl aus, kurz warten statt eine Sekunde.
+        my @read = $read_select->can_read(%cmd_letztes_byte ? 0.05 : 1);
 
         foreach my $read (@read) {
             LOGDEB("Lese Daten");
@@ -860,8 +1118,15 @@ sub start_event_loop($$) {
                     $zaehler{verbindungen}++;
                     $ism8_clients{$fn} = $neu;
                     $ism8_puffer{$fn}  = '';
-                    $wolf_client = $neu;
-                    $hash{ism8i_ip} = $client_address;
+                    # C5 (Durchgang 02.10.2026): die neue Verbindung wird NICHT
+                    # sofort Sendeziel - erst, wenn sie ein gueltiges Telegramm
+                    # geliefert hat. Ohne das innerhalb von 60 s wird sie
+                    # abgeraeumt (Hauptschleife).
+                    delete $ism8_gueltig{$fn};
+                    $ism8_zeit{$fn} = time;
+                    $ism8_adresse{$fn} = $client_address;
+                    keepalive_setzen($neu);
+                    $zustand_schmutzig = 1;
                     my $anz = scalar(keys %ism8_clients);
                     LOGINF("   Verbindung eines ISM8i Moduls von $client_address:$client_port"
                          . ($anz > 1 ? " ($anz Verbindungen offen)" : ""));
@@ -882,26 +1147,22 @@ sub start_event_loop($$) {
                 # nur, wenn Daten da sind oder die Gegenstelle zu ist.
                 # Abgebaut wird jetzt ausschliesslich bei einem echten
                 # Verbindungsende (read_wolf_messages liefert -1).
+                # read_wolf_messages liefert seit dem Durchgang 02.10.2026 die
+                # Zahl GUELTIGER Telegramme (C5), -1 beim Verbindungsende.
                 my $gelesen = read_wolf_messages($read);
                 if ($gelesen > 0) {
-                    $wolf_client = $read;   # die zuletzt aktive Verbindung
+                    my $fn = fileno($read) // -1;
+                    if (!$ism8_gueltig{$fn}) {
+                        $ism8_gueltig{$fn} = 1;
+                        $hash{ism8i_ip} = defined $ism8_adresse{$fn} ? $ism8_adresse{$fn} : '?';
+                        LOGINF("ISM8-Verbindung von $hash{ism8i_ip} liefert gueltige Telegramme - sie ist jetzt Sendeziel.");
+                    }
+                    $wolf_client = $read;   # die zuletzt aktive GUELTIGE Verbindung
                     send_OnlineState(1);
                 } elsif ($gelesen < 0) {
-                    my $fn = fileno($read) // -1;
-                    my $client_address = eval { $read->peerhost() } // "?";
-                    LOGINF("Verbindung zu $client_address beendet.");
-                    $read_select->remove($read);
-                    shutdown($read, 2);
-                    close($read);
-                    delete $ism8_clients{$fn};
-                    delete $ism8_puffer{$fn};
-                    if (defined $wolf_client and (fileno($wolf_client) // -2) == $fn) {
-                        # Zum Senden die naechstbeste offene Verbindung nehmen.
-                        my ($erste) = values %ism8_clients;
-                        $wolf_client = $erste;
-                    }
-                    send_OnlineState(scalar(keys %ism8_clients) ? 1 : 0);
+                    ism8_abbauen(fileno($read) // -1, 'Gegenstelle geschlossen oder Verbindungsfehler');
                 }
+                next;
             }
 
             if ($read == $command_socket) {
@@ -923,9 +1184,21 @@ sub start_event_loop($$) {
                     my $fn = fileno($neu) // -1;
                     my $adr = eval { $neu->peerhost() } // "?";
                     my $prt = eval { $neu->peerport() } // "?";
+                    # C7 (Durchgang 02.10.2026): nur der LoxBerry selbst und die
+                    # Miniserver aus general.json (Entscheidung 8, Frage 18;
+                    # Bauform Midea2Lox 4.5.10). Bis 3.1.5 konnte jedes Geraet
+                    # im LAN Sollwerte setzen (Bericht code, Befund 8).
+                    if (!absender_erlaubt($adr)) {
+                        $zaehler{befehle_weg}++;
+                        eval { $neu->send("ERR ABSENDER\n"); };
+                        eval { shutdown($neu, 2); close($neu); };
+                        $zustand_schmutzig = 1;
+                        next;
+                    }
                     LOGINF("   Verbindung eines Clients von $adr:$prt");
                     $cmd_clients{$fn} = $neu;
                     $cmd_zeit{$fn} = time;
+                    $cmd_puffer{$fn} = '';
                     $read_select->add($neu);
                 }
                 next;
@@ -933,21 +1206,59 @@ sub start_event_loop($$) {
 
             if (exists $cmd_clients{fileno($read) // -1}) {
                 my $fn = fileno($read) // -1;
-                read_command_messages($read, $wolf_client);
-                # Ein Befehl je Verbindung - so war es schon immer, und der
-                # Miniserver macht es auch so (CloseAfterSend).
-                $read_select->remove($read);
-                shutdown($read, 1);
-                close($read);
-                delete $cmd_clients{$fn};
-                delete $cmd_zeit{$fn};
+                # C10 (Durchgang 02.10.2026): bis zum Zeilenende sammeln. Bis
+                # 3.1.5 galt das erste Lesen als ganzer Befehl; kam "56;5" und
+                # 0,3 s spaeter "5\n", ging 5 statt 55 Grad hinaus (Bericht
+                # code, Befund 11). Ausgewertet wird bei Zeilenende, beim
+                # Schliessen der Gegenstelle oder 0,2 s nach dem letzten Byte.
+                my $stueck = '';
+                $! = 0;
+                my $erg = $read->recv($stueck, 4096, MSG_DONTWAIT);
+                my $wieder = ($!{EAGAIN} || $!{EWOULDBLOCK} || $!{EINTR}) ? 1 : 0;
+                my $ende = 0;
+                if (length($stueck) == 0) {
+                    next if !defined($erg) and $wieder;
+                    $ende = 1;   # Gegenstelle zu oder Fehler
+                }
+                $cmd_puffer{$fn} = '' unless defined $cmd_puffer{$fn};
+                $cmd_puffer{$fn} .= $stueck;
+                $cmd_letztes_byte{$fn} = Time::HiRes::time();
+                if ($ende or index($cmd_puffer{$fn}, "\n") >= 0 or length($cmd_puffer{$fn}) >= 4096) {
+                    befehl_abschliessen($fn);
+                }
                 next;
             }
+        }
+
+        # C10: angefangene Befehle nach der kurzen Frist auswerten.
+        if (%cmd_letztes_byte) {
+            my $jf = Time::HiRes::time();
+            for my $fn (keys %cmd_letztes_byte) {
+                if (!exists $cmd_clients{$fn}) { delete $cmd_letztes_byte{$fn}; next; }
+                next if $jf - $cmd_letztes_byte{$fn} < BEFEHL_FRIST;
+                befehl_abschliessen($fn);
+            }
+        }
+
+        # C5: ISM8-Verbindungen ohne gueltiges Telegramm nach 60 s abraeumen.
+        # In der Hauptschleife, nicht im Signalbehandler: dort koennte der
+        # Socket gerade in der Liste stehen, die oben abgearbeitet wird.
+        for my $fn (keys %ism8_zeit) {
+            next if $ism8_gueltig{$fn};
+            next if time - $ism8_zeit{$fn} < STILL_FRIST;
+            LOGWARN("ISM8-Port: Verbindung von "
+                  . (defined $ism8_adresse{$fn} ? $ism8_adresse{$fn} : '?')
+                  . " hat in " . STILL_FRIST . " s kein gueltiges Telegramm geliefert - abgeraeumt.");
+            ism8_abbauen($fn, 'still');
         }
 
         if ($mqtt) {
             $mqtt->tick();
             neuverbindung_pruefen();
+        }
+        # M2: voller Satz alle 30 min, und nach SIGHUP (M3/M6).
+        if ($mqtt and ($vollversand_faellig or time - $vollversand_letzt >= VOLLVERSAND_TAKT)) {
+            vollversand($vollversand_faellig ? 'nach Uebernahme der Konfiguration' : 'Takt 30 min');
         }
     }
 
@@ -959,15 +1270,116 @@ sub start_event_loop($$) {
     }
 }
 
-sub read_command_messages($$) {
+sub befehl_abschliessen
+# C10: einen gesammelten Befehl auswerten, beantworten und die Verbindung
+# schliessen. Ein Befehl je Verbindung - so war es schon immer, und der
+# Miniserver macht es auch so (CloseAfterSend).
+{
+   my $fn = shift;
+   my $s = $cmd_clients{$fn};
+   my $roh = defined $cmd_puffer{$fn} ? $cmd_puffer{$fn} : '';
+   my $p = index($roh, "\n");
+   $roh = substr($roh, 0, $p) if $p >= 0;
+   if (defined $s) {
+       read_command_messages($s, $wolf_client, $roh);
+       eval { $ereignis_auswahl->remove($s) if $ereignis_auswahl; shutdown($s, 1); close($s); 1; };
+   }
+   delete $cmd_clients{$fn};
+   delete $cmd_zeit{$fn};
+   delete $cmd_puffer{$fn};
+   delete $cmd_letztes_byte{$fn};
+}
+
+sub absender_laden
+# C7: die erlaubten Absender des Befehls-Ports. 127.0.0.1, die eigene
+# Adresse des LoxBerry (ein Paket an die eigene LAN-Adresse traegt sie als
+# Absender; von aussen verwirft Linux solche Pakete, accept_local=0) und die
+# Miniserver aus config/system/general.json (Ipaddress). Ein Name statt einer
+# Adresse wird aufgeloest; laesst er sich nicht aufloesen, fehlt er, und das
+# steht im Protokoll. Gelesen beim Start und bei jedem SIGHUP.
+{
+   %erlaubte_absender = ('127.0.0.1' => 'LoxBerry');
+   my $eigen = eval { LoxBerry::System::get_localip() };
+   $erlaubte_absender{$eigen} = 'LoxBerry'
+       if defined $eigen and $eigen =~ m/^\d{1,3}(?:\.\d{1,3}){3}$/;
+   no warnings 'once';
+   my $home = $LoxBerry::System::lbhomedir || $ENV{LBHOMEDIR} || '';
+   my $datei = $home ne '' ? "$home/config/system/general.json" : '';
+   my $j;
+   if ($datei ne '' and -r $datei and open(my $fh, '<:raw', $datei)) {
+       local $/;
+       my $roh = <$fh>;
+       close $fh;
+       # JSON::PP ist Kernmodul von Perl (seit 5.14).
+       $j = eval { require JSON::PP; JSON::PP->new->utf8->decode($roh) };
+   }
+   if (!$j or ref($j) ne 'HASH') {
+       LOGWARN("Befehls-Port: general.json nicht lesbar ($datei) - es werden nur "
+             . "Befehle vom LoxBerry selbst angenommen.");
+   } else {
+       my $ms = $j->{Miniserver};
+       for my $nr (ref($ms) eq 'HASH' ? sort keys %$ms : ()) {
+           my $e = $ms->{$nr};
+           next unless ref($e) eq 'HASH';
+           my $a = '';
+           for my $k ('Ipaddress', 'IPAddress', 'ipaddress') {
+               if (defined $e->{$k} and $e->{$k} =~ m/\S/) { $a = $e->{$k}; last; }
+           }
+           $a =~ s/^\s+|\s+$//g;
+           next if $a eq '';
+           if ($a =~ m/^\d{1,3}(?:\.\d{1,3}){3}$/) {
+               $erlaubte_absender{$a} = "Miniserver $nr";
+               next;
+           }
+           my $packed = inet_aton($a);
+           if ($packed) {
+               $erlaubte_absender{inet_ntoa($packed)} = "Miniserver $nr ($a)";
+           } else {
+               LOGWARN("Befehls-Port: Miniserver-Adresse '$a' laesst sich nicht aufloesen - "
+                     . "von dort werden keine Befehle angenommen.");
+           }
+       }
+   }
+   LOGINF("Befehls-Port nimmt Befehle an von: " . join(', ', sort keys %erlaubte_absender));
+}
+
+sub absender_erlaubt
+# C7: Darf dieser Absender Befehle schicken? Abweisung gebremst melden: die
+# erste sofort, danach hoechstens einmal je Stunde mit der Zahl der seither
+# abgewiesenen (Bauform Midea2Lox 4.5.10, absender_erlaubt()).
+{
+   my $adr = defined $_[0] ? $_[0] : '';
+   return 1 if exists $erlaubte_absender{$adr};
+   my $jetzt = time;
+   my $e = $fremde_absender{$adr};
+   if (!$e or $jetzt - $e->[0] >= 3600) {
+       my $zusatz = ($e and $e->[1]) ? " (seit der letzten Meldung $e->[1] weitere abgewiesen)" : '';
+       LOGWARN("Befehls-Port: Verbindung von $adr abgewiesen - nur der LoxBerry selbst und "
+             . "die Miniserver aus general.json duerfen Befehle schicken$zusatz.");
+       $fremde_absender{$adr} = [$jetzt, 0];
+   } else {
+       $e->[1]++;
+   }
+   return 0;
+}
+
+sub ist_ereignis
+# C6: Ereignisse und Taster sind von der 60-s-Gleichwertsperre ausgenommen
+# (Entscheidung 19): "1x Warmwasserladung global" stoesst eine Ladung an,
+# "Filterwarnung zuruecksetzen" quittiert. Alle uebrigen schreibbaren
+# Datenpunkte sind Sollwerte, Schalter oder Betriebsarten.
+{
+   my $name = getDatenpunkt($_[0], 2);
+   return ($name =~ m/^1x / or $name =~ m/zur(?:ü|ue)cksetzen/i) ? 1 : 0;
+}
+
+sub read_command_messages($$;$) {
    my $client_socket = $_[0];
    my $ism8_socket = $_[1];
 
-   # read up to 4096 characters from the connected client
-   my $rec_data = "";
-
-   LOGDEB("Lese Command Socket");
-   $client_socket->recv($rec_data, 4096, MSG_DONTWAIT);
+   # Seit dem Durchgang 02.10.2026 sammelt die Hauptschleife den Befehl bis
+   # zum Zeilenende (C10) und reicht ihn hier herein.
+   my $rec_data = defined $_[2] ? $_[2] : "";
 
    # V20: der Befehlsweg hat bis 3.0.8 NIE geantwortet - bei Erfolg wie bei
    # Ablehnung wurde die Verbindung einfach geschlossen. Ein verworfener
@@ -992,9 +1404,36 @@ sub read_command_messages($$) {
    # DPT_Enable, DPT_OpenClose, DPT_HVACMode und DPT_DHWMode durch die
    # Wertpruefung. Die Zahlentypen fuehren ein \s* im Muster und waren
    # deshalb unauffaellig - genau das machte den Fehler so schwer zu sehen.
+   $parse_grund = '';
    my $send_data = parseInput($befehl);
    if ($send_data) {
-        $ism8_socket->send($send_data);
+        # C6 (Durchgang 02.10.2026, X-7, Entscheidung 19): derselbe Sollwert
+        # innerhalb von 60 s geht nicht noch einmal auf den Heizungsbus.
+        # Verglichen wird das fertige Telegramm, also Datenpunkt UND
+        # kodierter Wert ("55" und "55.0" sind gleich). Bis 3.1.5 kamen zwei
+        # gleiche Befehle als zwei Telegramme an (Bericht code, Befund 7).
+        my ($bid) = $befehl =~ m/^\s*(\d+)\s*;/;
+        $bid = defined $bid ? $bid + 0 : -1;
+        my $l = $befehl_letzt{$bid};
+        if ($bid >= 0 and !ist_ereignis($bid) and $l and $l->[0] eq $send_data
+            and time - $l->[1] < GLEICHWERT_FRIST) {
+            $zaehler{befehle_gleich}++;
+            LOGINF("Befehl $befehl: derselbe Wert ging vor " . (time - $l->[1])
+                 . " s hinaus - nicht erneut gesendet (UNVERAENDERT).");
+            eval { $client_socket->send("OK $befehl UNVERAENDERT=1\n"); };
+            $zustand_schmutzig = 1;
+            return;
+        }
+        my $ok = $ism8_socket->send($send_data);
+        if (!defined $ok) {
+            # Bis 3.1.5 stand hier OK, auch wenn das Senden scheiterte.
+            $zaehler{befehle_weg}++;
+            LOGWARN("Befehl $befehl liess sich nicht an das ISM8 senden: $!");
+            eval { $client_socket->send("ERR SENDEN $befehl\n"); };
+            $zustand_schmutzig = 1;
+            return;
+        }
+        $befehl_letzt{$bid} = [$send_data, time] if $bid >= 0;
         $zaehler{befehle_ok}++;
         eval { $client_socket->send("OK $befehl\n"); };
         if ($hash{pull_on_write} eq '1') {
@@ -1002,7 +1441,10 @@ sub read_command_messages($$) {
         }
    } else {
         $zaehler{befehle_weg}++;
-        eval { $client_socket->send("ERR ABGEWIESEN $befehl\n"); };
+        # C8: ein Wert ausserhalb des Plausibilitaetsbereichs bekommt einen
+        # eigenen Grund, damit Loxone ihn von einem Formfehler trennen kann.
+        my $art = $parse_grund eq 'BEREICH' ? 'BEREICH' : 'ABGEWIESEN';
+        eval { $client_socket->send("ERR $art $befehl\n"); };
    }
    $zustand_schmutzig = 1;
 }
@@ -1016,6 +1458,7 @@ sub read_wolf_messages($) {
    LOGDEB("Lese Wolf Socket");
    $! = 0;
    my $erg = $client_socket->recv($rec_data, 4096, MSG_DONTWAIT);
+   my $wieder = ($!{EAGAIN} || $!{EWOULDBLOCK} || $!{EINTR} || !$!) ? 1 : 0;
 
    # Null Bytes heissen ZWEIERLEI, und die Unterscheidung steht nicht in der
    # Laenge, sondern im Rueckgabewert. Nachgemessen an einem echten Socket:
@@ -1034,7 +1477,12 @@ sub read_wolf_messages($) {
    # deshalb sauber: -1 heisst "Gegenstelle zu, sofort abbauen", 0 heisst
    # "diesmal nichts, weiter warten".
    if (length($rec_data) == 0) {
-       return defined($erg) ? -1 : 0;
+       return -1 if defined($erg);
+       # C5 (Durchgang 02.10.2026): ein ECHTER Fehler ist ein
+       # Verbindungsende - so meldet der Kern einen abgelaufenen Keepalive
+       # (ETIMEDOUT) oder einen Ruecksetzer. Bis 3.1.5 galt jedes undef als
+       # "diesmal nichts".
+       return $wieder ? 0 : -1;
    }
 
    LOGDEB("Daten Empfang (".length($rec_data)." Bytes):");
@@ -1052,6 +1500,7 @@ sub read_wolf_messages($) {
    # Laenge steht im Rahmen selbst (Byte 4 und 5).
    my $starter = chr(0x06).chr(0x20).chr(0xf0).chr(0x80);
    my $fn = fileno($client_socket) // -1;
+   my $gueltig = 0;   # C5: Zahl der gueltigen Telegramme in diesem Lesen
    $ism8_puffer{$fn} = '' unless defined $ism8_puffer{$fn};
    $ism8_puffer{$fn} .= $rec_data;
 
@@ -1089,15 +1538,34 @@ sub read_wolf_messages($) {
        if (length($send_data) > 0) { $client_socket->send($send_data); }
 
        $zaehler{telegramme}++;
-       decodeTelegram($r);
+       $gueltig++ if decodeTelegram($r);
    }
 
-    # Start the online reset timeout
-    if ($hash{online_timeout} > 0) {
+    # Start the online reset timeout - nur nach einem gueltigen Telegramm.
+    if ($gueltig > 0 and $hash{online_timeout} > 0) {
         $online_reset_timer = $hash{online_timeout};
     }
 
-    return 1;
+    return $gueltig;
+}
+
+sub dpt_laenge
+# C9: die Wertlaenge, die ein KNX-Datenpunkttyp im Rahmen hat - GELESEN aus
+# der ISM8i-Betriebsanleitung (10/2024, Kap. 8.6 "Datentypen"): 1.xxx, 5.xxx
+# und 20.xxx 1 Byte, 7.001 (U16) und 9.xxx (F16) 2 Byte, 10.001 und 11.001
+# 3 Byte, 13.xxx 4 Byte. Ein unbekannter Typ: keine Pruefung (undef).
+{
+   my $t = defined $_[0] ? $_[0] : '';
+   my %l = (
+       DPT_Switch => 1, DPT_Bool => 1, DPT_Enable => 1, DPT_OpenClose => 1,
+       DPT_Scaling => 1, DPT_Value_1_Ucount => 1,
+       DPT_HVACMode => 1, DPT_DHWMode => 1, DPT_HVACContrMode => 1,
+       DPT_Value_2_Ucount => 2, DPT_Value_Temp => 2, DPT_Value_Tempd => 2,
+       DPT_Value_Pres => 2, DPT_Power => 2, DPT_Value_Volume_Flow => 2,
+       DPT_TimeOfDay => 3, DPT_Date => 3,
+       'DPT_FlowRate_m3/h' => 4, DPT_ActiveEnergy => 4, DPT_ActiveEnergy_kWh => 4,
+   );
+   return exists $l{$t} ? $l{$t} : undef;
 }
 
 
@@ -1243,20 +1711,66 @@ sub decodeTelegram($)
    my $MainService = hex($h[10]);
    my $SubService = hex($h[11]);
 
-   if ($FrameSize != $TelegrammLength) {
+   # C5: Rueckgabe 1 heisst "gueltiges Telegramm" (SetDatapointValue.Req mit
+   # stimmender Rahmenlaenge), sonst 0.
+   my $gueltig = 0;
+   if ($TelegrammLength < 16) {
+        $zaehler{rahmenfehler}++;
+        LOGERR("*** ERROR: Rahmen mit $TelegrammLength Byte ist zu kurz fuer einen Kopf (16). ***");
+   } elsif ($FrameSize != $TelegrammLength) {
         $zaehler{rahmenfehler}++;
         LOGERR("*** ERROR: TelegrammLength/FrameSize missmatch. [".$FrameSize."/".$TelegrammLength."] ***");
    } elsif ($SubService != 0x06) {
         LOGERR("*** WARNING: No SetDatapointValue.Req. [".sprintf("%x", $SubService)."] ***");
    } elsif ($MainService == 0xF0 and $SubService == 0x06) {
+      $gueltig = 1;
       my $StartDatapoint = hex($h[12].$h[13]);
       my $NumberOfDatapoints = hex($h[14].$h[15]);
 	  my $Position = 0;
+      # C9 (Durchgang 02.10.2026): die Anzahl gegen die Rahmenlaenge
+      # deckeln. Ein Datenpunkt braucht mindestens 5 Byte (Kennung 2, Befehl
+      # 1, Laenge 1, Wert 1). Bis 3.1.5 liefen bei 16 Byte und Anzahl 65535
+      # 65 535 Schleifenrunden (Bericht code, Befund 10, R2).
+      my $hoechstens = int(($TelegrammLength - 16) / 5);
+      if ($NumberOfDatapoints > $hoechstens) {
+          $zaehler{rahmenfehler}++;
+          LOGERR("*** ERROR: Rahmen nennt $NumberOfDatapoints Datenpunkte, $TelegrammLength Byte "
+               . "tragen hoechstens $hoechstens - gedeckelt. ***");
+          $NumberOfDatapoints = $hoechstens;
+      }
 
 	  for (my $n=1; $n <= $NumberOfDatapoints; $n++) {
+         # C9: Grenzen je Datenpunkt. Kopf (4 Byte) und Wert muessen im
+         # Rahmen liegen, sonst wird der Rest des Rahmens verworfen. Bis
+         # 3.1.5 wurde ein abgeschnittener Wert als Messwert weitergegeben
+         # (R1: 006;0.12 statt "ungueltig").
+         if ($Position + 20 > $TelegrammLength) {
+             $zaehler{rahmenfehler}++;
+             LOGERR("*** ERROR: Datenpunkt $n von $NumberOfDatapoints: Kopf reicht ueber das "
+                  . "Rahmenende ($TelegrammLength Byte) - Rest verworfen. ***");
+             last;
+         }
          my $DP_ID = hex($h[$Position + 16].$h[$Position + 17]);
          my $DP_command = hex($h[$Position + 18]);
          my $DP_length = hex($h[$Position + 19]);
+         if ($DP_length < 1 or $Position + 20 + $DP_length > $TelegrammLength) {
+             $zaehler{rahmenfehler}++;
+             LOGERR("*** ERROR: Datenpunkt $DP_ID: Wertlaenge $DP_length reicht ueber das "
+                  . "Rahmenende ($TelegrammLength Byte) - Rest des Rahmens verworfen. ***");
+             last;
+         }
+         # C9: die Wertlaenge muss zum Typ passen (R4: Temperatur mit 1 Byte
+         # ergab 007;0.11). Verworfen wird nur dieser Datenpunkt.
+         my $soll_laenge = dpt_laenge(getDatenpunkt($DP_ID, 3));
+         if (defined $soll_laenge and $DP_length != $soll_laenge) {
+             $verworfen++;
+             $zaehler{verworfen} = $verworfen;
+             LOGWARN("Datenpunkt $DP_ID: Wertlaenge $DP_length passt nicht zum Typ "
+                   . getDatenpunkt($DP_ID, 3) . " (erwartet $soll_laenge) - ERR:Laenge, nicht gesendet.");
+             $zustand_schmutzig = 1;
+             $Position += 4 + $DP_length;
+             next;
+         }
          my $v = "";
 		 my $send_msg = "";
          for (my $i=0; $i <= $DP_length - 1; $i++) { $v .= $h[$Position + 20 + $i]; }
@@ -1403,7 +1917,8 @@ sub decodeTelegram($)
 
                              # Der KNX-Typ entscheidet ueber retain - siehe
                              # ist_zustand() und @ZUSTAND_TYPEN.
-                             publish_MQTT($DP_ID, $topic, $value, ist_zustand($datatype));
+                             publish_MQTT($DP_ID, $topic, $value,
+                                          ist_zustand($datatype, getDatenpunkt($DP_ID, 4)));
                         }
 
                     err:
@@ -1411,6 +1926,7 @@ sub decodeTelegram($)
 		 $Position += 4 + $DP_length;
 	  }
    }
+   return $gueltig;
 }
 
 
@@ -1561,9 +2077,13 @@ sub loadConfig
 		         # gemeldet statt stillschweigend ersetzt.
      		     if ($fields[1] =~ m/^(?:(?:\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.){3}(?:\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])$/) {
 		         $hash{mcip} = $fields[1]; } else {
+		            # O5 (Durchgang 02.10.2026): der Rat stimmte nicht - genau
+		            # die Wahl eines Miniservers mit Rechnernamen fuehrte hierher.
 		            LOGWARN("multicast_ip ist keine gueltige IPv4-Adresse: "
-		                  . "'$fields[1]' - es gilt der Vorgabewert 239.7.7.77. "
-		                  . "Im Reiter Einstellungen den Miniserver waehlen und speichern.");
+		                  . "'$fields[1]' - es gilt der Vorgabewert 239.7.7.77 (Multicast-Gruppe). "
+		                  . "Die UDP-Direktausgabe erreicht den Miniserver damit nicht. Abhilfe: im "
+		                  . "Reiter Einstellungen einen Miniserver mit IPv4-Adresse oder die "
+		                  . "Multicast-Gruppe waehlen und speichern.");
 		            $hash{mcip} = '239.7.7.77'; }
 		      } elsif ($fields[0] eq "multicast_port") {
 		         if ($fields[1] =~ m/^([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$/ and $fields[1] > 0 and $fields[1] <= 65535) {
@@ -1914,6 +2434,18 @@ sub parseInput($)
         LOGERR("Datenpunkt $id kann nicht beschrieben werden!");
         return;
     }
+    # C8 (Durchgang 02.10.2026): Plausibilitaetsbereich je Datenpunkt
+    # (%PLAUSIBEL, Herkunft dort). Gilt fuer den Befehls-Port UND den
+    # MQTT-Weg - beide rufen diese Funktion.
+    my $dp_name = getDatenpunkt($id, 2);
+    my $bereich = $PLAUSIBEL{$dp_name};
+    if ($bereich and defined $data and $data =~ m/^\s*-?\d+(\.\d+)?\s*$/
+        and ($data < $bereich->[0] or $data > $bereich->[1])) {
+        LOGERR("Datenpunkt $id ($dp_name): $data liegt ausserhalb des zulaessigen Bereichs "
+             . "$bereich->[0] bis $bereich->[1] - abgewiesen, nicht geklemmt.");
+        $parse_grund = 'BEREICH';
+        return;
+    }
 
     LOGDEB("VALUE: ".$data);
 
@@ -1994,8 +2526,12 @@ sub parseInput($)
             }
             $enc_value = pack("C", $data);
         } elsif ($geraet =~ /CWL/) {
-            if (!($data == 0 || $data == 1 || $data == 3 || $data == 4)) {
-                LOGERR("Invalid input!");
+            # C8: die Betriebsanleitung des ISM8i (10/2024, S. 46) nennt fuer
+            # den Datenpunkt "Programm" der CWL als Eingang 0, 1 und 3; die 4
+            # (Feuchteschutz) ist nur ein gelesener Zustand.
+            if (!($data == 0 || $data == 1 || $data == 3)) {
+                LOGERR("Datenpunkt $id (CWL Programm): $data ist kein zulaessiger Eingang (0, 1 oder 3).");
+                $parse_grund = 'BEREICH';
                 return;
             }
             $enc_value = pack("C", $data);

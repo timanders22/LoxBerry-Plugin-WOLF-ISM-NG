@@ -57,6 +57,29 @@ fi
 BINPATH="$BASE/bin/plugins/$PDIR"
 
 # ---------------------------------------------------------------------------
+# 0. SG-Ready: einen gesendeten Zwang zuruecknehmen (C2, Durchgang 02.10.2026)
+# ---------------------------------------------------------------------------
+# VOR dem Anhalten: die Befehle gehen ueber den Befehls-Port des Dienstes.
+# Bis 3.1.5 blieb die Heizung nach der Deinstallation im angehobenen oder
+# gedimmten Zustand (Bericht code, Befund 2). Nur wenn der Merker einen Zwang
+# traegt; dazu einmal ueber MQTT laden 0, dimmen 0, lage aus. Gelingt es
+# nicht (Dienst oder ISM8 fehlt), steht eine <WARNING> da.
+if command -v php >/dev/null 2>&1 && [ -f "$BINPATH/wolf_sg.php" ]; then
+    WI_ZRC=0
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su -s /bin/bash loxberry -c "$(printf '%q ' env "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PDIR" \
+            timeout -k 5 30 php "$BINPATH/wolf_sg.php" --zuruecknehmen)" < /dev/null 2>&1 || WI_ZRC=$?
+    else
+        env "LBHOMEDIR=$BASE" "LBPPLUGINDIR=$PDIR" timeout -k 5 30 php "$BINPATH/wolf_sg.php" \
+            --zuruecknehmen < /dev/null 2>&1 || WI_ZRC=$?
+    fi
+    case "$WI_ZRC" in
+        0|1|2) ;;
+        *) echo "<WARNING> SG-Ready: das Zuruecknehmen endete unerwartet (Rueckgabe $WI_ZRC) - an der Heizung kann noch ein Zwang stehen." ;;
+    esac
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Dienst anhalten - argumentweise (Muster 4 der Nachlese)
 # ---------------------------------------------------------------------------
 # Erkennung und Beenden wie in bin/wolf_server. Bis 3.1.4 genuegte der Pfad
@@ -181,6 +204,33 @@ if [ -f "$ZWEITSCHRIFT" ]; then
 else
     echo "<INFO> Keine Zweitschrift der Einstellungen vorhanden."
 fi
+
+# I1/I3 (Durchgang 02.10.2026): die Zweitschrift der Stoercodetabelle und
+# die beiseitegelegten .alt einer Neuinstallation gehoeren mit weg.
+for WI_REST in "$BASE/config/plugins/$PDIR.backup.wolf_stoercodes.csv" \
+               "$BASE/config/plugins/$PDIR.backup.wolf_ism8i.conf.alt" \
+               "$BASE/config/plugins/$PDIR.backup.wolf_stoercodes.csv.alt"; do
+    [ -f "$WI_REST" ] || continue
+    if rm -f "$WI_REST"; then
+        echo "<OK> Entfernt: $WI_REST"
+    else
+        echo "<WARNING> Liess sich nicht entfernen: $WI_REST"
+    fi
+done
+# Nachtrag 02.10.2026: der SG-Bestand neben dem Datenordner (und seine .alt).
+# Schritt 0 hat einen Zwang vorher zurueckgenommen.
+for WI_REST in "$BASE/data/plugins/$PDIR.bestand" "$BASE/data/plugins/$PDIR.bestand.alt"; do
+    [ -d "$WI_REST" ] || continue
+    case "$WI_REST" in
+        */data/plugins/?*.bestand|*/data/plugins/?*.bestand.alt) ;;
+        *) continue ;;
+    esac
+    if rm -rf "${WI_REST:?}"; then
+        echo "<OK> Entfernt: $WI_REST"
+    else
+        echo "<WARNING> Liess sich nicht entfernen: $WI_REST"
+    fi
+done
 
 echo "<INFO> Der ISM8-Port ist damit wieder frei."
 exit 0

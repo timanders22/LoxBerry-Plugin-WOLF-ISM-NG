@@ -102,17 +102,23 @@ function wi_pruefzeilen($cfg)
     }
 
     // --- Die Ursache steht VOR der Wirkung -------------------------------
+    /* O10 (Durchgang 02.10.2026, Regeln/04): ausgeschaltet ist eine
+     * Entscheidung und kein Fehler - die Zeile ist grau. Ueber einen nicht
+     * eingeschalteten Dienst wird kein Lauf beurteilt: Waechter und Modul,
+     * die dann nicht laufen, sind ebenfalls grau. Bis 3.1.5 standen auf
+     * jeder frischen Anlage vier Kreuze fuer Werksvorgaben (Bericht
+     * oberflaeche, O10). */
     $an = wi_cfg($cfg, 'enable', '0') === '1';
-    $z[] = array($an ? 1 : 0, wi_t('PZ.EIN'),
+    $z[] = array($an ? 1 : -1, wi_t('PZ.EIN'),
                  $an ? wi_t('PZ.EIN_JA') : wi_t('PZ.EIN_NEIN'));
 
     $wd = wi_server_pid();
-    $z[] = array($wd ? 1 : 0, wi_t('PZ.WATCHDOG'),
-                 $wd ? sprintf(wi_t('PZ.PID'), $wd) : wi_t('PZ.LAEUFT_NICHT'));
+    $z[] = array($wd ? 1 : ($an ? 0 : -1), wi_t('PZ.WATCHDOG'),
+                 $wd ? sprintf(wi_t('PZ.PID'), $wd) : ($an ? wi_t('PZ.LAEUFT_NICHT') : wi_t('PZ.AUS_GEWOLLT')));
 
     $sv = wi_ism8i_pid();
-    $z[] = array($sv ? 1 : 0, wi_t('PZ.MODUL'),
-                 $sv ? sprintf(wi_t('PZ.PID'), $sv) : wi_t('PZ.LAEUFT_NICHT'));
+    $z[] = array($sv ? 1 : ($an ? 0 : -1), wi_t('PZ.MODUL'),
+                 $sv ? sprintf(wi_t('PZ.PID'), $sv) : ($an ? wi_t('PZ.LAEUFT_NICHT') : wi_t('PZ.AUS_GEWOLLT')));
 
     /* --- Liegt eine Marke einer laufenden Aktualisierung? ----------------
      *
@@ -226,7 +232,8 @@ function wi_pruefzeilen($cfg)
     $to = wi_cfg($cfg, 'online_timeout', '-1');
     $z[] = array($hz > 0 ? 1 : 0, wi_t('PZ.HERZ'),
                  $hz > 0 ? sprintf(wi_t('PZ.HERZ_JA'), $hz) : wi_t('PZ.HERZ_AUS'));
-    $z[] = array(((string) $to === '-1' || (int) $to <= 0) ? 0 : 1, wi_t('PZ.AUSFALL'),
+    // O10: online_timeout -1 ist die Werksvorgabe, bewusst aus - grau.
+    $z[] = array(((string) $to === '-1' || (int) $to <= 0) ? -1 : 1, wi_t('PZ.AUSFALL'),
                  ((string) $to === '-1' || (int) $to <= 0)
                     ? wi_t('PZ.AUSFALL_AUS') : sprintf(wi_t('PZ.AUSFALL_JA'), (int) $to));
 
@@ -316,6 +323,29 @@ function wi_pruefzeilen($cfg)
                                                              wi_alter_text($a14)) : ''));
     }
 
+    /* --- C1: Begrenzt die Hoechstdauer die Anhebung? -------------------
+     * (Durchgang 02.10.2026, Entscheidung 31.) Strich, wenn SG-Ready aus ist. */
+    if (wi_cfg($cfg, 'sg_ein', '0') !== '1') {
+        $z[] = array(-1, wi_t('PZ.HOECHST'), wi_t('PZ.SG_AUS'));
+    } else {
+        $hl = wi_sg_lage($cfg);
+        if ($hl['gekappt']) {
+            $z[] = array(1, wi_t('PZ.HOECHST'), sprintf(wi_t('PZ.HOECHST_GEKAPPT'),
+                (int) $hl['laden_max'], date('d.m. H:i', (int) $hl['laden_seit'])));
+        } elseif ($hl['lage'] === 'laden' && (int) $hl['laden_seit'] > 0) {
+            $z[] = array(1, wi_t('PZ.HOECHST'), sprintf(wi_t('PZ.HOECHST_LAEUFT'),
+                date('d.m. H:i', (int) $hl['laden_seit']),
+                date('d.m. H:i', (int) $hl['laden_seit'] + 3600 * (int) $hl['laden_max']),
+                (int) $hl['laden_max']));
+        } else {
+            $z[] = array(1, wi_t('PZ.HOECHST'), sprintf(wi_t('PZ.HOECHST_RUHE'), (int) $hl['laden_max']));
+        }
+    }
+
+    // --- O11: Stimmt die Themenliste mit dem Sendecode ueberein? ----------
+    list($ok6, $txt6) = wi_themen_pruefen();
+    $z[] = array($ok6 === null ? -1 : ($ok6 ? 1 : 0), wi_t('PZ.THEMEN'), $txt6);
+
     // --- Betriebsart-Tabellen gegen das Perl ------------------------------
     list($ok3, $txt3) = wi_arten_pruefen($fw);
     $z[] = array($ok3 === null ? -1 : ($ok3 ? 1 : 0), wi_t('PZ.ARTEN'), $txt3);
@@ -392,7 +422,97 @@ function wi_zustandstypen_pruefen()
             $nur_o ? implode(', ', $nur_o) : '-',
             $nur_d ? implode(', ', $nur_d) : '-'));
     }
+    /* M7 (Durchgang 02.10.2026): auch die Regel "schreibbar = Zustand" muss
+     * auf beiden Seiten gleich stehen. */
+    $sd = preg_match('/our\s+\$ZUSTAND_SCHREIBBAR\s*=\s*([01])\s*;/', $quelle, $ms) ? (int) $ms[1] : -1;
+    if ($sd !== (wi_zustand_schreibbar() ? 1 : 0)) {
+        return array(false, sprintf(wi_t('PZ.RETAIN_SCHREIBBAR_NEIN'),
+            $sd === -1 ? '?' : (string) $sd, wi_zustand_schreibbar() ? '1' : '0'));
+    }
     return array(true, sprintf(wi_t('PZ.RETAIN_JA'), count($ober)));
+}
+
+/**
+ * O11 (Durchgang 02.10.2026): Stimmt die Themenliste des Reiters MQTT mit
+ * dem Sendecode ueberein? Gezaehlt werden die woertlichen Themen in
+ * bin/wolf_ism8i.pl ("$hash{praefix}/<name>") gegen wi_mqtt_feste_themen()
+ * und die SG-Themen in bin/wolf_sg.php ('sg/<name>') gegen
+ * wi_sg_mqtt_themen() - aus beiden Listen entsteht die Tabelle. Die
+ * Datenpunktthemen bildet wi_topic() nach derselben Regel wie
+ * getMQTTFriendly() im Dienst.
+ */
+function wi_themen_pruefen()
+{
+    $p = wi_paths();
+    $lies = function ($name) use ($p) {
+        foreach (array($p['bindir'] . '/' . $name, dirname(dirname(__DIR__)) . '/bin/' . $name) as $k) {
+            if (is_file($k)) {
+                return (string) @file_get_contents($k);
+            }
+        }
+        return '';
+    };
+    $pl = $lies('wolf_ism8i.pl');
+    $sg = $lies('wolf_sg.php');
+    if ($pl === '' || $sg === '') {
+        return array(null, wi_t('PZ.THEMEN_UNLESBAR'));
+    }
+    preg_match_all('#"\$hash\{praefix\}/([a-z_]+)"#', $pl, $a);
+    preg_match_all("#'(sg/[a-z_]+)'#", $sg, $b);
+    $dienst = array_values(array_unique($a[1]));
+    $sgcode = array_values(array_unique($b[1]));
+    $liste_f = array_keys(wi_mqtt_feste_themen());
+    $liste_s = wi_sg_mqtt_themen();
+    if (!$dienst || !$sgcode) {
+        return array(null, wi_t('PZ.THEMEN_UNLESBAR'));
+    }
+    sort($dienst); sort($sgcode); sort($liste_f); sort($liste_s);
+    if ($dienst === $liste_f && $sgcode === $liste_s) {
+        return array(true, sprintf(wi_t('PZ.THEMEN_JA'), count($liste_f), count($liste_s)));
+    }
+    $ab = array_merge(array_diff($dienst, $liste_f), array_diff($sgcode, $liste_s));
+    $fe = array_merge(array_diff($liste_f, $dienst), array_diff($liste_s, $sgcode));
+    return array(false, sprintf(wi_t('PZ.THEMEN_NEIN'),
+        $ab ? implode(', ', $ab) : '-', $fe ? implode(', ', $fe) : '-'));
+}
+
+/**
+ * O11 (Durchgang 02.10.2026): zwei Pruefzeilen am GERENDERTEN HTML.
+ * index.php puffert den eigenen Teil der Seite und ruft diese Funktion zum
+ * Schluss; das Ergebnis ersetzt einen Platzhalter in der Liste.
+ *   - Tragen alle Formulare das Merkmal? Jedes <form>...</form> muss ein
+ *     fmt mit 32-stelligem Wert und activetab tragen.
+ *   - Setzt der Server sm-active? Genau ein Reiter und genau ein Bereich,
+ *     beide der serverseitig gewaehlte.
+ * Rueckgabe array(html der Zeilen, Liste der Ausgaenge 1|0|-1).
+ */
+function wi_pruef_gerendert($html, $tab)
+{
+    $zeile = function ($s, $frage, $antwort) {
+        $k = $s === 1 ? 'sm-ja' : ($s === 0 ? 'sm-nein' : 'sm-grau');
+        return '<li class="' . $k . '"><b>' . wi_e($frage) . '</b>' . wi_e($antwort) . '</li>' . "\n";
+    };
+    $aus = '';
+    $stat = array();
+    preg_match_all('#<form\b[^>]*>(.*?)</form>#si', (string) $html, $m);
+    $n = count($m[0]);
+    $ok = 0;
+    foreach ($m[1] as $inhalt) {
+        if (preg_match('#name="fmt" value="[0-9a-f]{32}"#', $inhalt)
+            && preg_match('#name="activetab" value="tab-[a-z]+"#', $inhalt)) {
+            $ok++;
+        }
+    }
+    $s = $n === 0 ? -1 : ($ok === $n ? 1 : 0);
+    $stat[] = $s;
+    $aus .= $zeile($s, wi_t('PZ.FORMULARE'), sprintf(wi_t('PZ.FORMULARE_ZAHL'), $ok, $n));
+
+    $nl = preg_match_all('#class="sm-tab sm-active"\s+data-pane="(tab-[a-z]+)"#', (string) $html, $ml);
+    $nb = preg_match_all('#class="sm-pane sm-active" id="(tab-[a-z]+)"#', (string) $html, $mb);
+    $s2 = ($nl === 1 && $nb === 1 && $ml[1][0] === $tab && $mb[1][0] === $tab) ? 1 : 0;
+    $stat[] = $s2;
+    $aus .= $zeile($s2, wi_t('PZ.SMACTIVE'), sprintf(wi_t('PZ.SMACTIVE_ZAHL'), (int) $nl, (int) $nb, $tab));
+    return array($aus, $stat);
 }
 
 /** Alle vier Vorlagen erzeugen und durch simplexml_load_string schicken. */
@@ -776,46 +896,73 @@ function wi_test_ausfuehren($was)
 /**
  * Retained gebliebene Themen aufraeumen (V13).
  *
- * Geschickt wird ueber den UDP-Eingang des MQTT-Gateways: "retain <thema> "
- * mit LEERER Nutzlast loescht im MQTT-Protokoll einen retained-Wert.
+ * M6 (Durchgang 02.10.2026): direkt AM BROKER, mit Nachlesen in derselben
+ * Verbindung (wi_mqtt_leeren_praefix(), dieselbe Bauart wie die
+ * Deinstallation), ueber das eingestellte und alle vorgemerkten alten
+ * Praefixe (M3). Geleert wird nur, was die LAUFENDE Konfiguration nicht
+ * sendet: alte Praefixe, Datenpunkte anderer Firmwarefassungen, Messwerte,
+ * Lebenszeichen und SG-Themen. online und die Zustaende der eingestellten
+ * Firmware bleiben stehen (wi_mqtt_behalten()). Danach bekommt der Dienst
+ * SIGHUP und sendet alles einmal neu (Vollversand).
  *
- * NICHT GEMESSEN und deshalb ausdruecklich gesagt: ob das Gateway eine leere
- * Nutzlast so weiterreicht, ist an einem Broker zu pruefen. Der Trockenlauf
- * schickt NICHTS und zeigt nur, was hinausginge - er ist die Stufe davor.
+ * Bis 3.1.5 ging je Thema eine leere retained Zeile ueber den UDP-Eingang
+ * des Gateways (verlustbehaftet, ohne Nachlesen) an ALLE Themen - auch an
+ * online und die gueltigen Zustaende, die danach bis zum naechsten
+ * Wertwechsel fehlten (Bericht mqtt, Befund 6, Fall F). Der Vermerk "NICHT
+ * GEMESSEN" ist seit den Messungen vom 06.09. und 19.09.2026 (Regeln/07)
+ * ueberholt und entfallen.
+ *
+ * Der Trockenlauf LIEST nur (ein Abonnement, kein Senden) und nennt, was
+ * geleert wuerde.
  */
 function wi_aufraeumen($cfg, $ernst)
 {
-    $themen = wi_alle_themen($cfg);
-    $port = wi_mqtt_udpinport();
-    $kopf = sprintf(wi_t('PRUEF.AR_KOPF'), count($themen)) . "\n";
+    $pre = wi_cfg($cfg, 'praefix', 'wolf_ng');
+    $praefixe = array_values(array_unique(array_merge(array($pre), wi_praefixe_alt())));
+    $behalten = wi_mqtt_behalten($cfg);
+    $kopf = sprintf(wi_t('PRUEF.AR_KOPF2'), implode(', ', $praefixe), count($behalten)) . "\n";
 
     if (!$ernst) {
-        $kopf .= wi_t('PRUEF.AR_TROCKEN') . "\n\n";
-        $zeig = array_slice($themen, 0, 40);
-        $kopf .= implode("\n", $zeig);
-        if (count($themen) > 40) {
-            $kopf .= "\n" . sprintf(wi_t('PRUEF.AR_WEITERE'), count($themen) - 40);
+        $t = $kopf . wi_t('PRUEF.AR_TROCKEN') . "\n\n";
+        $alle = array();
+        foreach ($praefixe as $pp) {
+            $f = wi_mqtt_sitzung(array($pp . '/#'));
+            if ($f['lage'] !== 'ok') {
+                $t .= sprintf(wi_t('PRUEF.AR_UNBEKANNT'), $pp) . "\n";
+                continue;
+            }
+            $bek = wi_mqtt_bekannt($cfg, $pp);
+            foreach (array_keys($f['belegt']) as $th) {
+                if (isset($bek[$th]) && !isset($behalten[$th])) {
+                    $alle[] = $th;
+                }
+            }
         }
-        return array(wi_t('PRUEF.T_AUFRAEUMEN'), $kopf);
+        if (!$alle) {
+            $t .= wi_t('PRUEF.AR_NICHTS');
+        } else {
+            $t .= sprintf(wi_t('PRUEF.AR_WUERDE'), count($alle)) . "\n" . implode("\n", array_slice($alle, 0, 40));
+            if (count($alle) > 40) {
+                $t .= "\n" . sprintf(wi_t('PRUEF.AR_WEITERE'), count($alle) - 40);
+            }
+        }
+        return array(wi_t('PRUEF.T_AUFRAEUMEN'), $t);
     }
 
-    if (!$port) {
-        return array(wi_t('PRUEF.T_AUFRAEUMEN'), $kopf . wi_t('PRUEF.AR_KEIN_PORT'));
-    }
-    $sock = @fsockopen('udp://127.0.0.1', (int) $port, $nr, $txt, 3);
-    if (!$sock) {
-        return array(wi_t('PRUEF.T_AUFRAEUMEN'),
-                     $kopf . sprintf(wi_t('PRUEF.AR_KEIN_SOCKET'), (int) $port, wi_e($txt)));
-    }
-    $n = 0;
-    foreach ($themen as $th) {
-        if (@fwrite($sock, 'retain ' . $th . " \n") !== false) {
-            $n++;
+    $t = $kopf;
+    foreach ($praefixe as $pp) {
+        $e = wi_mqtt_leeren_praefix($cfg, $pp, $behalten);
+        if ($e['lage'] !== 'ok') {
+            $t .= sprintf(wi_t('PRUEF.AR_UNBEKANNT'), $pp) . "\n";
+        } elseif ($e['rest']) {
+            $t .= sprintf(wi_t('PRUEF.AR_REST'), $pp, count($e['rest']), $e['rest'][0]) . "\n";
+        } else {
+            $t .= sprintf(wi_t('PRUEF.AR_OK'), $pp, (int) $e['geleert']) . "\n";
+            if ($pp !== $pre) {
+                wi_praefix_vergessen($pp);
+            }
         }
-        usleep(2000);
     }
-    fclose($sock);
-    return array(wi_t('PRUEF.T_AUFRAEUMEN'),
-        $kopf . sprintf(wi_t('PRUEF.AR_ERNST'), $n, (int) $port) . "\n\n"
-              . wi_t('PRUEF.AR_VORBEHALT'));
+    $t .= "\n" . (wi_dienst_hup() ? wi_t('PRUEF.AR_VOLLVERSAND') : wi_t('PRUEF.AR_KEIN_DIENST'));
+    return array(wi_t('PRUEF.T_AUFRAEUMEN'), $t);
 }

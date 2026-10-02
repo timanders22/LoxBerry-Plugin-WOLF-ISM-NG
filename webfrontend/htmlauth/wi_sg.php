@@ -361,6 +361,37 @@ function wi_sg_fahrplan($preise, $anzahl, $block, $ab = null, $horizont = 24)
     return array($fenster, $fenster ? '' : 'SG.PLAN_NICHTS_FREI');
 }
 
+/**
+ * C1 (Durchgang 02.10.2026, Entscheidung 31): Hoechstdauer der Anhebung.
+ *
+ * Bis 3.1.5 galt "laden" so lange, wie der Plan Fenster aneinanderreihte -
+ * mit sg_stunden 24 und sg_block 12 waren es 24 h am Stueck (Bericht code,
+ * Befund 1, S5). Jetzt endet eine zusammenhaengende Anhebung nach sg_laden_max
+ * Stunden; danach gilt "normal", bis der Plan das Ladefenster verlaesst. Die
+ * naechste Ladung darf wieder die volle Dauer laufen.
+ *
+ * Gemessen wird ab dem Zeitpunkt, an dem "laden" WIRKLICH gestellt wurde
+ * (Merker laden_seit) - nicht ab dem Fensterbeginn im Plan: der Plan wird in
+ * jedem Lauf vom Beginn der laufenden Stunde an neu gerechnet, ein
+ * angefangenes Fenster steht darin nicht mehr.
+ *
+ * GRENZE, ehrlich: faellt der LoxBerry oder der Cron selbst aus, faengt das
+ * nichts ab - die Werte liegen im Wolf-Regler. Das sagt auch der Hilfetext.
+ *
+ * Rueckgabe array(laden, gekappt, laden_seit)
+ */
+function wi_sg_kappen($laden, $merker, $max_h, $jetzt)
+{
+    $seit = (is_array($merker) && !empty($merker['laden_seit'])) ? (int) $merker['laden_seit'] : 0;
+    if (!$laden) {
+        return array(false, false, 0);
+    }
+    if ($seit > 0 && $max_h > 0 && $jetzt - $seit >= $max_h * 3600) {
+        return array(false, true, $seit);
+    }
+    return array(true, false, $seit);
+}
+
 /** Liegt $jetzt in einem der Fenster? */
 function wi_sg_im_fenster($fenster, $jetzt = null)
 {
@@ -407,26 +438,69 @@ function wi_sg_14a($cfg)
         return array(null, -1, 'SG.E14_KEINE_DATEI');
     }
     $d = wi_sg_json_lesen($f);
-    if ($d === null || !isset($d['dimmen'])) {
+    if ($d === null) {
         return array(null, -1, 'SG.E14_KAPUTT');
     }
-    $ts = isset($d['ts']) && ctype_digit((string) $d['ts']) ? (int) $d['ts'] : (int) (is_file($f) ? @filemtime($f) : 0);
-    $alter = max(0, time() - $ts);
-    $grenze = (int) wi_cfg($cfg, 'sg_14a_alter', '900');
-    if ($grenze > 0 && $alter > $grenze) {
-        /* VERALTET. Und jetzt kommt die Entscheidung, die man aussprechen
-         * muss, statt sie im Code zu verstecken:
-         *
-         * Es wird NICHT gedimmt. Ein ausgefallener Melder ist kein Befehl
-         * des Netzbetreibers, und die netzdienliche Steuerung haengt
-         * ohnehin an dessen Steuerbox - nicht an diesem Plugin. Wuerde hier
-         * vorsorglich gedimmt, kuehlte das Haus aus, weil ein Draht locker
-         * ist. Gemeldet wird es dafuer laut: die Zeile im Reiter Test wird
-         * rot, und das MQTT-Thema sg/14a traegt -1. */
-        return array(false, $alter, 'SG.E14_VERALTET');
+    return wi_sg_14a_auswerten($d, (int) @filemtime($f), time(),
+                               (int) wi_cfg($cfg, 'sg_14a_alter', '900'));
+}
+
+/**
+ * Das gelesene Signal auswerten - ohne Datei, ohne Uhr (fuer den Selbsttest).
+ *
+ * C4 (Durchgang 02.10.2026). Bis 3.1.5 machte max(0, time()-ts) einen
+ * Zeitstempel in MILLISEKUNDEN oder einen aus der ZUKUNFT fuer immer
+ * "frisch": stirbt der Schreiber, blieb die Dimmung unbegrenzt stehen, und
+ * der Reiter Test zeigte dazu einen Haken (Bericht code, Befund 4, S6b/S6c).
+ * Ein unbekannter Wert ("dimmen": 2) wurde still als "nicht dimmen" gelesen.
+ * Jetzt:
+ *   - dimmen nimmt nur 0, 1, true oder false an (auch als Zeichenkette);
+ *   - ein ts mit 13 und mehr Ziffern (Millisekunden) oder mehr als 300 s in
+ *     der Zukunft ist KAPUTT; ein ts, der keine ganze Zahl ist, ebenso;
+ *   - ohne ts gilt das Dateidatum wie bisher.
+ * Kaputt und veraltet liefern null: es wird NICHT gedimmt, und sg/dimmen
+ * traegt -1, wie README und Kommentar es zusagen (Befund 5).
+ * Rueckgabe: array(dimmen true|false|null, alter, hinweisschluessel)
+ */
+function wi_sg_14a_auswerten($d, $mtime, $jetzt, $grenze)
+{
+    if (!is_array($d) || !array_key_exists('dimmen', $d)) {
+        return array(null, -1, 'SG.E14_KAPUTT');
     }
-    $dimmen = ($d['dimmen'] === 1 || $d['dimmen'] === '1'
-               || $d['dimmen'] === true || $d['dimmen'] === 'true');
+    $roh = $d['dimmen'];
+    if ($roh === 1 || $roh === '1' || $roh === true || $roh === 'true') {
+        $dimmen = true;
+    } elseif ($roh === 0 || $roh === '0' || $roh === false || $roh === 'false') {
+        $dimmen = false;
+    } else {
+        return array(null, -1, 'SG.E14_KAPUTT_WERT');
+    }
+    if (array_key_exists('ts', $d)) {
+        $t = $d['ts'];
+        if (!(is_int($t) || (is_string($t) && ctype_digit($t)))) {
+            return array(null, -1, 'SG.E14_KAPUTT_TS');
+        }
+        $t = (string) $t;
+        if (strlen($t) >= 13) {
+            return array(null, -1, 'SG.E14_KAPUTT_TS');   // Millisekunden
+        }
+        $ts = (int) $t;
+        if ($ts > $jetzt + 300) {
+            return array(null, -1, 'SG.E14_KAPUTT_TS');   // Zukunft
+        }
+    } else {
+        $ts = (int) $mtime;
+    }
+    $alter = max(0, $jetzt - $ts);
+    if ($grenze > 0 && $alter > $grenze) {
+        /* VERALTET. Es wird NICHT gedimmt: ein ausgefallener Melder ist kein
+         * Befehl des Netzbetreibers, und die netzdienliche Steuerung haengt
+         * an dessen Steuerbox, nicht an diesem Plugin. Gemeldet wird es
+         * laut: die Zeile im Reiter Test wird rot, und sg/dimmen traegt -1
+         * (seit dem Durchgang 02.10.2026 wirklich; bis 3.1.5 ging 0 hinaus,
+         * Bericht code, Befund 5). */
+        return array(null, $alter, 'SG.E14_VERALTET');
+    }
     return array($dimmen, $alter, $dimmen ? 'SG.E14_AKTIV' : 'SG.E14_RUHE');
 }
 
@@ -519,7 +593,11 @@ function wi_sg_lage($cfg)
         null,
         (int) wi_cfg($cfg, 'sg_horizont', '24'));
     list($dimmen, $alter14a, $h14a) = wi_sg_14a($cfg);
-    $laden = wi_sg_im_fenster($fenster);
+    $laden_plan = wi_sg_im_fenster($fenster);
+    $max_h = (int) wi_cfg($cfg, 'sg_laden_max', '6');
+    $merker = wi_sg_merker();
+    list($laden, $gekappt, $laden_seit) = wi_sg_kappen($laden_plan && $dimmen !== true,
+                                                         $merker, $max_h, time());
     $b = wi_sg_befehle($cfg, $laden, $dimmen === true);
     return array(
         'ein'        => $ein,
@@ -533,6 +611,11 @@ function wi_sg_lage($cfg)
         'alter14a'   => $alter14a,
         'h14a'       => $h14a,
         'laden'      => $laden,
+        'laden_plan' => $laden_plan,
+        'gekappt'    => $gekappt,
+        'laden_seit' => $laden_seit,
+        'laden_max'  => $max_h,
+        'merker'     => $merker,
         'lage'       => $b['lage'],
         'befehle'    => $b['befehle'],
         'fehlt'      => $b['fehlt'],
@@ -569,11 +652,76 @@ function wi_sg_json_lesen($pfad)
 /** Merkerdatei: welche Lage wurde zuletzt wirklich gestellt? */
 function wi_sg_merker_datei()
 {
+    $o = wi_sg_bestand_ordner();
+    return $o !== '' ? $o . '/sg_stand.json' : sys_get_temp_dir() . '/wolf_sg_stand.json';
+}
+
+/**
+ * Der Bestand des SG-Moduls NEBEN dem Datenordner: data/plugins/<ordner>.bestand/
+ * (Durchgang 02.10.2026, Nachtrag). Bis dahin lag der Merker in
+ * data/plugins/<ordner>/, und purge_installation loescht genau diesen Ordner
+ * bei jedem Upgrade: nach einem Update waehrend einer Ladung wusste das Modul
+ * nichts mehr von dem gesendeten Zwang - Hoechstdauer und Zuruecknehmen beim
+ * Ausschalten griffen nie. Eine Neuinstallation legt den Bestand nach .alt
+ * (postinstall.sh, Entscheidung 1), die Deinstallation raeumt ihn ab.
+ * Leer ohne LoxBerry-Wurzel.
+ */
+function wi_sg_bestand_ordner()
+{
     $p = wi_paths();
-    if ($p['home'] !== '') {
-        return $p['home'] . '/data/plugins/' . $p['plugin'] . '/sg_stand.json';
+    return $p['home'] !== '' ? $p['home'] . '/data/plugins/' . $p['plugin'] . '.bestand' : '';
+}
+
+/** Befehlszeilen "<id>;<wert>" aus einer Befehlsliste (C3). */
+function wi_sg_zeilen($befehle)
+{
+    $z = array();
+    foreach ($befehle as $b) {
+        $z[] = $b['id'] . ';' . $b['wert'];
     }
-    return sys_get_temp_dir() . '/wolf_sg_stand.json';
+    return $z;
+}
+
+/**
+ * C3: Steht an der Heizung schon genau das? Verglichen werden Lage, Kreis UND
+ * Befehlszeilen. Bis 3.1.5 nur die Lage: nach einem Kreiswechsel waehrend
+ * einer Ladung blieb der alte Kreis angehoben und der neue wurde nie
+ * gestellt (Bericht code, Befund 3, S4); ebenso nach einem geaenderten
+ * Ladesollwert. Ein Merker ohne Kreis (bis 3.1.5 geschrieben) gilt als
+ * verschieden - es wird einmal neu gestellt.
+ */
+function wi_sg_gleich($merker, $lage, $kreis, $zeilen)
+{
+    if (!is_array($merker) || !isset($merker['lage'], $merker['kreis'], $merker['zeilen'])
+        || !is_array($merker['zeilen'])) {
+        return false;
+    }
+    return (string) $merker['lage'] === (string) $lage
+        && (string) $merker['kreis'] === (string) $kreis
+        && array_values($merker['zeilen']) === array_values($zeilen);
+}
+
+/** Befehle senden; Rueckgabe array(angekommen, meldungen). */
+function wi_sg_befehle_senden($cfg, $befehle)
+{
+    $n = 0;
+    $meld = array();
+    foreach ($befehle as $b) {
+        $antwort = wi_befehl_senden($cfg, $b['id'] . ';' . $b['wert']);
+        $meld[] = array('SG.M_GESENDET', array($b['id'], $b['wert'], $antwort));
+        if (strpos((string) $antwort, 'OK') === 0) {
+            $n++;
+        }
+    }
+    return array($n, $meld);
+}
+
+/** Die Normalbefehle fuer einen bestimmten Kreis (C2, C3). */
+function wi_sg_normal_fuer($cfg, $kreis)
+{
+    $c = $cfg;
+    $c['sg_kreis'] = $kreis;
+    return wi_sg_befehle($c, false, false);
 }
 
 /**
@@ -598,47 +746,174 @@ function wi_sg_stellen($cfg, $ernst)
     if (!$l['befehle']) {
         return array(0, 0, array(array('SG.M_NICHTS', array())));
     }
+    if ($l['gekappt']) {
+        $meld[] = array('SG.M_GEKAPPT', array((int) $l['laden_max'],
+                                              date('d.m. H:i', (int) $l['laden_seit'])));
+    }
     // Nur bei WECHSEL stellen. Ein Cron alle fuenf Minuten, der jedes Mal
     // vier Befehle schickt, erzeugt 1152 Schreibvorgaenge am Tag an einer
     // Heizung, die sich dreimal aendert.
-    $merker = wi_sg_json_lesen(wi_sg_merker_datei());
-    $vorher = $merker !== null && isset($merker['lage']) ? (string) $merker['lage'] : '';
-    if ($vorher === $l['lage']) {
-        return array(0, count($l['befehle']), array(array('SG.M_UNVERAENDERT', array($l['lage']))));
+    $merker = $l['merker'];
+    $zeilen = wi_sg_zeilen($l['befehle']);
+    if (wi_sg_gleich($merker, $l['lage'], $l['kreis'], $zeilen)) {
+        // C1: endet die Ladung im Plan, faellt laden_seit - sonst kappte die
+        // naechste Ladung sofort. Dafuer wird nichts gesendet.
+        if ($ernst && $l['senden'] && !empty($merker['laden_seit']) && !$l['gekappt']
+            && $l['lage'] !== 'laden') {
+            $merker['laden_seit'] = 0;
+            wi_sg_merker_schreiben($merker);
+        }
+        $meld[] = array('SG.M_UNVERAENDERT', array($l['lage']));
+        return array(0, count($l['befehle']), $meld);
     }
     if (!$ernst || !$l['senden']) {
         $meld[] = array('SG.M_TROCKEN', array($l['lage'], count($l['befehle'])));
         return array(0, 0, $meld);
     }
 
-    $n = 0;
-    foreach ($l['befehle'] as $b) {
-        $antwort = wi_befehl_senden($cfg, $b['id'] . ';' . $b['wert']);
-        $meld[] = array('SG.M_GESENDET', array($b['id'], $b['wert'], $antwort));
-        if (strpos((string) $antwort, 'OK') === 0) {
-            $n++;
+    $vorher_lage = is_array($merker) && isset($merker['lage']) ? (string) $merker['lage'] : '';
+    $vorher_kreis = is_array($merker) && isset($merker['kreis']) ? (string) $merker['kreis'] : '';
+    /* C3: Kreiswechsel waehrend eines Zwangs - zuerst den ALTEN Kreis auf
+     * normal stellen. Kommt das nicht ganz an, wird der neue nicht gestellt
+     * und der Merker bleibt: der naechste Lauf versucht es wieder. */
+    if ($vorher_kreis !== '' && $vorher_kreis !== $l['kreis']
+        && in_array($vorher_lage, array('laden', 'dimmen'), true)) {
+        $alt = wi_sg_normal_fuer($cfg, $vorher_kreis);
+        if ($alt['fehlt'] || !$alt['befehle']) {
+            $meld[] = array('SG.M_KREIS_ALT_FEHLT', array($vorher_kreis));
+        } else {
+            list($na, $ma) = wi_sg_befehle_senden($cfg, $alt['befehle']);
+            $meld = array_merge($meld, $ma);
+            if ($na !== count($alt['befehle'])) {
+                $meld[] = array('SG.M_TEILWEISE', array($na, count($alt['befehle'])));
+                return array($na, 0, $meld);
+            }
+            $meld[] = array('SG.M_KREIS_ZURUECK', array($vorher_kreis, $l['kreis']));
         }
     }
+
+    list($n, $ms) = wi_sg_befehle_senden($cfg, $l['befehle']);
+    $meld = array_merge($meld, $ms);
     if ($n === count($l['befehle'])) {
         // Der Merker wird NUR fortgeschrieben, wenn wirklich alles ankam.
         // Sonst stuende beim naechsten Lauf "unveraendert", waehrend die
         // Heizung halb gestellt ist.
-        wi_sg_merker_schreiben($l['lage'], $n);
+        if ($l['gekappt']) {
+            $seit = (int) $l['laden_seit'];
+        } elseif ($l['lage'] === 'laden') {
+            $seit = ($vorher_lage === 'laden' && !empty($merker['laden_seit']))
+                ? (int) $merker['laden_seit'] : time();
+        } else {
+            $seit = 0;
+        }
+        wi_sg_merker_schreiben(array('lage' => $l['lage'], 'kreis' => $l['kreis'],
+                                     'zeilen' => $zeilen, 'laden_seit' => $seit,
+                                     'gekappt' => $l['gekappt'] ? 1 : 0));
     } else {
         $meld[] = array('SG.M_TEILWEISE', array($n, count($l['befehle'])));
     }
     return array($n, 0, $meld);
 }
 
-/** Merker unteilbar schreiben: Nebendatei mit PID, Rechte vor Inhalt, rename. */
-function wi_sg_merker_schreiben($lage, $anzahl)
+/**
+ * C2 (Durchgang 02.10.2026): einen gesendeten Zwang zuruecknehmen.
+ *
+ * Bis 3.1.5 liess das Ausschalten (sg_ein oder sg_senden auf 0) und die
+ * Deinstallation die Heizung DAUERHAFT im angehobenen (WW-Soll 55, +2 K)
+ * oder gedimmten Zustand stehen (Bericht code, Befund 2, S2/S3). Jetzt wird
+ * einmal "normal" gesendet - nur wenn der Merker einen Zwang (laden oder
+ * dimmen) traegt, fuer den Kreis aus dem Merker. Kommt nicht alles an,
+ * bleibt der Merker stehen, und der naechste Lauf des Waechters versucht es
+ * wieder.
+ *
+ * Rueckgabe array(rc, meldungen): rc 0 = nichts zu tun oder zurueckgenommen,
+ * 1 = nicht (ganz) angekommen.
+ */
+function wi_sg_zuruecknehmen($cfg)
+{
+    $m = wi_sg_merker();
+    if ($m === null || !in_array((string) $m['lage'], array('laden', 'dimmen'), true)) {
+        return array(0, array(array('SG.M_ZURUECK_NICHTS', array())));
+    }
+    $kreis = (isset($m['kreis']) && isset(wi_sg_kreise()[(string) $m['kreis']]))
+        ? (string) $m['kreis'] : wi_cfg($cfg, 'sg_kreis', 'direkt');
+    $b = wi_sg_normal_fuer($cfg, $kreis);
+    if ($b['fehlt'] || !$b['befehle']) {
+        return array(1, array(array('SG.M_FEHLT', array(implode(', ', $b['fehlt'])))));
+    }
+    list($n, $meld) = wi_sg_befehle_senden($cfg, $b['befehle']);
+    if ($n === count($b['befehle'])) {
+        wi_sg_merker_schreiben(array('lage' => 'normal', 'kreis' => $kreis,
+                                     'zeilen' => wi_sg_zeilen($b['befehle']),
+                                     'laden_seit' => 0, 'gekappt' => 0));
+        $meld[] = array('SG.M_ZURUECK_OK', array((string) $m['lage'], $kreis));
+        return array(0, $meld);
+    }
+    $meld[] = array('SG.M_ZURUECK_TEIL', array($n, count($b['befehle'])));
+    return array(1, $meld);
+}
+
+/** Merkdatei: hat ein Lauf mit sg_ein 1 schon SG-Themen gesendet? (C2) */
+function wi_sg_mqtt_merker_datei()
+{
+    $o = wi_sg_bestand_ordner();
+    return $o !== '' ? $o . '/sg_mqtt_ein' : '';
+}
+
+/**
+ * C2: beim Ausschalten EINMAL ueber MQTT sg/laden 0, sg/dimmen 0 und sg/lage
+ * aus senden (Regeln/07: "Eine Empfehlung, die verstummt, sendet 0, nicht
+ * nichts"). Bis 3.1.5 behielt der virtuelle Eingang in Loxone die 1 auf
+ * Dauer (Bericht mqtt, Befund 8). Einmal heisst: nur, wenn ein Lauf mit
+ * sg_ein 1 vorher etwas gesendet hat (Merkdatei), oder ausdruecklich
+ * ($immer, Deinstallation). Rueckgabe: Zahl der gesendeten Zeilen.
+ */
+function wi_sg_mqtt_aus($cfg, $immer)
+{
+    $merk = wi_sg_mqtt_merker_datei();
+    if (!$immer && ($merk === '' || !is_file($merk))) {
+        return 0;
+    }
+    $port = wi_mqtt_udpinport();
+    if (!$port || wi_cfg($cfg, 'mqtt', '0') !== '1') {
+        return 0;
+    }
+    $pre = wi_cfg($cfg, 'praefix', 'wolf_ng');
+    set_error_handler(function () { return true; });
+    $sock = fsockopen('udp://127.0.0.1', (int) $port, $nr, $txt, 3);
+    restore_error_handler();
+    if (!$sock) {
+        return 0;
+    }
+    $n = 0;
+    foreach (array('sg/laden' => '0', 'sg/dimmen' => '0', 'sg/lage' => 'aus') as $t => $w) {
+        $z = 'publish ' . $pre . '/' . $t . ' ' . $w . "\n";
+        if (@fwrite($sock, $z) === strlen($z)) {
+            $n++;
+        }
+        usleep(2000);
+    }
+    fclose($sock);
+    if ($merk !== '' && is_file($merk)) {
+        @unlink($merk);
+    }
+    return $n;
+}
+
+/**
+ * Merker unteilbar schreiben: Nebendatei mit PID, Rechte vor Inhalt, rename.
+ * Seit dem Durchgang 02.10.2026 mit Kreis, Befehlszeilen und laden_seit (C1, C3).
+ */
+function wi_sg_merker_schreiben(array $daten)
 {
     $ziel = wi_sg_merker_datei();
     $ordner = dirname($ziel);
     if (!is_dir($ordner)) {
         @mkdir($ordner, 0775, true);
     }
-    $js = json_encode(array('lage' => $lage, 'ts' => time(), 'befehle' => (int) $anzahl));
+    $daten['ts'] = time();
+    $daten['befehle'] = isset($daten['zeilen']) && is_array($daten['zeilen']) ? count($daten['zeilen']) : 0;
+    $js = json_encode($daten);
     if ($js === false) {
         return false;
     }
@@ -654,12 +929,24 @@ function wi_sg_merker_schreiben($lage, $anzahl)
         @unlink($tmp);
         return false;
     }
-    return @rename($tmp, $ziel);
+    if (!@rename($tmp, $ziel)) {
+        @unlink($tmp);
+        return false;
+    }
+    return true;
 }
 
 /** Die zuletzt gestellte Lage, fuer die Anzeige. */
 function wi_sg_merker()
 {
     $d = wi_sg_json_lesen(wi_sg_merker_datei());
+    if ($d === null) {
+        // Ein Merker am alten Ort (bis zum Nachtrag 02.10.2026) gilt noch,
+        // bis der naechste Lauf am neuen Ort schreibt.
+        $p = wi_paths();
+        if ($p['home'] !== '') {
+            $d = wi_sg_json_lesen($p['home'] . '/data/plugins/' . $p['plugin'] . '/sg_stand.json');
+        }
+    }
     return $d !== null && isset($d['lage']) ? $d : null;
 }

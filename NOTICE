@@ -67,3 +67,30 @@ Aktualisierungsskripte, config/wolf_ism8i.conf, dpkg/apt.
          Jeder virtuelle Eingang im Miniserver, der darauf hoert, muss
          nachgezogen werden. An den Ports (12004, 12005, 35353) aendert sich
          nichts.
+
+  Durchgang 02.10.2026 - Aenderungen im Kern (bin/wolf_ism8i.pl, bin/wolf_server).
+         Der Urhebervermerk, die Mailadresse und die Nutzungsbedingungen im
+         Kopf beider Dateien sind unveraendert.
+
+         bin/wolf_ism8i.pl
+         - Gesendet wird nur an eine ISM8-Verbindung, die schon ein
+           gueltiges Telegramm geliefert hat; stille Verbindungen werden
+           nach 60 s abgeraeumt; jede ISM8-Verbindung bekommt SO_KEEPALIVE
+           (60/10/3); "online" folgt der gueltigen Verbindung.
+         - Befehls-Port: Absenderpruefung (LoxBerry selbst und die
+           Miniserver aus general.json), Befehl bis zum Zeilenende
+           gesammelt, derselbe Sollwert binnen 60 s wird nicht erneut
+           gesendet (OK ... UNVERAENDERT=1), Plausibilitaetsbereiche je
+           Datenpunkt nach der ISM8i-Betriebsanleitung (ERR BEREICH), ein
+           gescheitertes Senden meldet ERR SENDEN statt OK.
+         - Rahmenzerlegung: Grenzen je Datenpunkt, Wertlaenge gegen den
+           Typ, Zahl der Datenpunkte gegen die Rahmenlaenge.
+         - MQTT: erst binden, dann beim Broker anmelden; nach jeder
+           Neuverbindung ein frisches Objekt (neues Abonnement) und ein
+           Vollversand, dazu ein voller Satz alle 30 Minuten; Praefixwechsel
+           mit Vollversand unter dem neuen Praefix; "MQTT aus" leert und
+           trennt sauber; schreibbare Datenpunkte gehen retained hinaus.
+
+         bin/wolf_server
+         - Startsperre (flock) um start und restart, der Watchdog erbt sie
+           nicht; als root aufgerufen steigt das Skript selbst zu loxberry ab.

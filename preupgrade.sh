@@ -169,4 +169,21 @@ else
     echo "<WARNING> die vorhandene Zweitschrift bleibt unveraendert."
 fi
 
+# I3 (Durchgang 02.10.2026): eine eigene Zweitschrift fuer die eigene
+# Stoercodetabelle, neben dem Konfigurationsordner, mit denselben Rechten
+# wie das Original (cp -p). Gibt es keine eigene Tabelle mehr, faellt eine
+# alte Zweitschrift weg (Entscheidung 1: nie einen Bestand aus einem
+# frueheren Vorgang einspielen).
+WI_CSV_Z="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_stoercodes.csv"
+if [ -f "$NETZ_CFG/wolf_stoercodes.csv" ]; then
+    if cp -p "$NETZ_CFG/wolf_stoercodes.csv" "$WI_CSV_Z" 2>/dev/null \
+       && cmp -s "$NETZ_CFG/wolf_stoercodes.csv" "$WI_CSV_Z"; then
+        echo "<INFO> Zweitschrift der eigenen Stoercodetabelle angelegt."
+    else
+        echo "<WARNING> Die Zweitschrift $WI_CSV_Z liess sich nicht anlegen."
+    fi
+elif [ -f "$WI_CSV_Z" ]; then
+    rm -f "$WI_CSV_Z" && echo "<INFO> Alte Zweitschrift der Stoercodetabelle entfernt - es gibt keine eigene Tabelle mehr."
+fi
+
 exit 0
