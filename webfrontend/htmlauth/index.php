@@ -877,15 +877,22 @@ $wi_sicherung_mangel = wi_sicherung_maengel($wi_cfg);
 <div class="sm-warnung"><?= $wi_h ?></div>
 <?php } ?>
 
-<div class="sm-alert sm-info">
-<?= wi_t('KOPF.SERVER') ?> <b><?= $wi_pid ? wi_t('KOPF.LAEUFT') : wi_t('KOPF.LAEUFT_NICHT') ?></b><?= $wi_pid ? ' (PID ' . $wi_pid . ') ' : ' ' ?>
-&middot; <?= sprintf(wi_t('KOPF.FIRMWARE'), wi_e($wi_fw), count($wi_dps)) ?>
-&middot; <?= wi_t('KOPF.WEG') ?> <b><?= wi_cfg($wi_cfg, 'mqtt', '0') === '1' ? 'MQTT' : '&ndash;' ?><?= wi_cfg($wi_cfg, 'output', 'none') !== 'none' ? ' + ' . wi_e(strtoupper(wi_cfg($wi_cfg, 'output', 'none'))) : '' ?></b>
-&middot; <?= wi_t('KOPF.LOXBERRY') ?> <span class="sm-mono"><?= wi_e($wi_ip) ?></span>
-<?php if (is_array($wi_zustand) && isset($wi_zustand['werte'])) { ?>
-&middot; <?= sprintf(wi_t('KOPF.WERTE'), count($wi_zustand['werte']), wi_e(wi_alter_text(wi_zustand_alter()))) ?>
-<?php } ?>
-</div>
+<?php /* Kopf (Entscheidung Nr. 43, seit 3.1.9): Statusuebersicht ueber den
+   Reitern, immer sichtbar. Bis 3.1.8 stand dasselbe als Fliesszeile in einem
+   Meldungskasten. Nur Werte, die oben schon gelesen sind. */ ?>
+<table class="sm-tbl" style="max-width:620px">
+<tr><th><?= wi_t('KOPF.EIGENSCHAFT') ?></th><th><?= wi_t('KOPF.WERT') ?></th></tr>
+<tr><td><?= wi_t('KOPF.T_SERVER') ?></td>
+    <td><b><?= $wi_pid ? wi_t('KOPF.LAEUFT') : wi_t('KOPF.LAEUFT_NICHT') ?></b><?= $wi_pid ? ' (PID ' . (int) $wi_pid . ')' : '' ?></td></tr>
+<tr><td><?= wi_t('KOPF.T_ISM8') ?></td>
+    <td><?= sprintf(wi_t('KOPF.FIRMWARE'), wi_e($wi_fw), count($wi_dps)) ?></td></tr>
+<tr><td><?= wi_t('KOPF.T_WEG') ?></td>
+    <td><b><?= wi_cfg($wi_cfg, 'mqtt', '0') === '1' ? 'MQTT' : '&ndash;' ?><?= wi_cfg($wi_cfg, 'output', 'none') !== 'none' ? ' + ' . wi_e(strtoupper(wi_cfg($wi_cfg, 'output', 'none'))) : '' ?></b></td></tr>
+<tr><td><?= wi_t('KOPF.T_LOXBERRY') ?></td>
+    <td><span class="sm-mono"><?= wi_e($wi_ip) ?></span></td></tr>
+<tr><td><?= wi_t('KOPF.T_ABBILD') ?></td>
+    <td><?= is_array($wi_zustand) && isset($wi_zustand['werte']) ? sprintf(wi_t('KOPF.WERTE'), count($wi_zustand['werte']), wi_e(wi_alter_text(wi_zustand_alter()))) : wi_e(wi_alter_text(-1)) ?></td></tr>
+</table>
 
 <?php
 /*
@@ -930,6 +937,8 @@ $wi_sicherung_mangel = wi_sicherung_maengel($wi_cfg);
 
 <!-- ================= Reiter: Einstellungen ================= -->
 <div class="sm-pane<?php echo $wi_tab === 'tab-settings' ? ' sm-active' : ''; ?>" id="tab-settings">
+<div class="sm-hinweis" style="background:#f2f8ea;border-color:#cfe3b0"><?= wi_t('KOPF.WAS_IST_DAS') ?></div>
+
 <form method="post" action="index.php">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings"><?= wi_fmt() ?>
 

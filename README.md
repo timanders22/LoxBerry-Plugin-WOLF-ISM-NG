@@ -10,6 +10,16 @@ Plugins dieses Hauses an den Loxone Music Server, MusicServer4Home, eine
 eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (seit 3.1.8, ab Werk
 aus; Adresse und Vorlage nur im Heimnetz, die Sprechtoken in keiner Sicherung).
 
+## Neu in 3.1.9
+
+Kopf wie alle Hausplugins: Statusübersicht über den Reitern, Zusammenfassung oben im ersten Reiter.
+
+* **Statusübersicht über den Reitern** als Tabelle: Server (mit PID), ISM8-Firmware und Zahl der Datenpunkte,
+  Weg zu Loxone, Adresse des LoxBerry, Werte im Abbild und ihr Alter. Dieselben Werte standen bisher als
+  eine Zeile in einem blauen Hinweiskasten.
+* **Zusammenfassung** des Plugins in einem grünen Kasten oben im Reiter Einstellungen.
+* Nur Oberfläche; gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Bitte zuerst lesen: Nutzungsbedingungen
 
 Der Kern dieses Plugins — `bin/wolf_ism8i.pl` und `bin/wolf_server` — stammt
