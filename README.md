@@ -4,6 +4,11 @@ Nimmt die Daten des Wolf-Schnittstellenmoduls **ISM8** entgegen, übersetzt die
 KNX-Telegramme in lesbare Werte und reicht sie an den Loxone Miniserver weiter —
 per MQTT oder, auf dem alten Weg, per UDP. In der Gegenrichtung nimmt es
 Schreibbefehle des Miniservers entgegen.
+Auf Wunsch sagt es eine Störung der Heizung und einen Ausfall (Dienst oder
+ISM8 länger als 15 Minuten weg) an – über die gemeinsame Sprachausgabe der
+Plugins dieses Hauses an den Loxone Music Server, MusicServer4Home, eine
+eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (seit 3.1.8, ab Werk
+aus; Adresse und Vorlage nur im Heimnetz, die Sprechtoken in keiner Sicherung).
 
 ## Bitte zuerst lesen: Nutzungsbedingungen
 
@@ -22,6 +27,26 @@ und die vollständige Kette der Werke stehen in [LICENSE](LICENSE) und
 Die Kette: **Dr. Mugur Dietrich** (Auswertungsmodul, 2017) → **Dominik
 Holland** ([Gagi2k/LoxBerry-Plugin-WolfIsm8](https://github.com/Gagi2k/LoxBerry-Plugin-WolfIsm8),
 Einbettung als LoxBerry-Plugin) → diese Fortführung.
+
+## Version 3.1.8
+
+Ansage bei Störung der Heizung und bei Ausfall, ab Werk aus (Entscheidung 36/40, gemeinsame Sprachausgabe 1.1.1 Stufe 2).
+Gemessen unter PHP 7.4 und 8.5 gegen Attrappen (Music Server, Alexa-NG) und in WSL mit dem echten Dienst gegen eine
+ISM8-Attrappe; nicht am Gerät, nicht an einem echten Lautsprecher, nicht an einer echten Heizung.
+
+* **Neu: Ansage bei Störung und Ausfall (ab Werk aus).** Reiter Einstellungen, Abschnitt „Sprachausgabe“: Loxone
+  Music Server, MusicServer4Home, eine eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (Chromecast 4 Lox NG).
+  Zwei Anlässe mit eigenem Haken: Störung der Heizung (Datenpunkt „Störung“ wechselt auf An; mit gewählter
+  Störcodetabelle samt Klartext des Störcodes) und Ausfall (Dienst oder ISM8 mindestens 15 Minuten weg).
+* Jedes Ereignis einmal, bei Eintritt – nicht in jedem Takt. Ein Takt alle fünf Minuten (`bin/wolf_ansage.php` aus
+  `cron/cron.05min`).
+* Adresse des Music Servers und Adressvorlage nur im Heimnetz.
+* Testansage per Knopf im Reiter Test; zwei Prüfzeilen dort.
+* Die Sprechtoken stehen nie in der Seite, im Protokoll oder in einer Sicherung; eine Sicherungsdatei mit einem
+  Sprechtoken wird abgewiesen. Sicherungen aus 3.1.6 lassen sich weiter zurückspielen.
+* MQTT, UDP, die Werte in Loxone und der Dienst bleiben unverändert.
+
+**In Loxone:** nichts zu tun; wer die Ansage will, schaltet sie im Reiter Einstellungen ein.
 
 ## Version 3.1.6
 
@@ -1132,6 +1157,8 @@ in der Weboberfläche des ISM8 steht, sonst stimmen die Datenpunktnummern nicht.
 | `webfrontend/htmlauth/wi_test.php` | Aktionen des Reiters Test |
 | `bin/wolf_ism8i.pl` | Auswertungsmodul, unverändert aus 2.4.0 |
 | `bin/wolf_server`, `bin/wolf_watchdog.sh` | Start, Stopp, Überwachung |
+| `bin/wolf_ansage.php` | Ansage bei Störung und Ausfall, alle fünf Minuten aus `cron/cron.05min` |
+| `webfrontend/htmlauth/sprachausgabe.php` | gemeinsame Sprachausgabe (Abschrift, nicht von Hand ändern) |
 | `bin/wolf_datenpunkte_1*.csv` | Datenpunkttabellen je Firmware |
 | `config/wolf_ism8i.conf` | Konfiguration, Format unverändert |
 

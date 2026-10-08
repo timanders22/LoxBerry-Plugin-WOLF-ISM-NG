@@ -22,6 +22,10 @@
  * Kompatibel mit PHP 7.4 und PHP 8.x (LoxBerry 3.x/4.x).
  */
 
+/* Gemeinsame Sprachausgabe (Abschrift von Werkzeuge/gemeinsam/sprachausgabe.php, Nr. 36 b,
+ * seit 3.1.8). Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden. */
+require_once __DIR__ . '/sprachausgabe.php';
+
 if (!function_exists('wi_e')) {
     /**
      * Maskieren fuer die Ausgabe.
@@ -1117,6 +1121,16 @@ function wi_konfig_text($cfg)
     foreach (wi_defaults() as $k => $vorgabe) {
         $t .= $k . ' ' . (isset($cfg[$k]) && $cfg[$k] !== '' ? $cfg[$k] : $vorgabe) . "\n";
     }
+    /* Nr. 36 b (seit 3.1.8): die Sprachausgabe - je Anlass ein Haken und der Block tts als
+     * JSON in EINER Zeile, ohne Sprechtoken. Sie liegt nicht in wolf_ism8i.conf, sondern in
+     * wolf_ansage.json; die Sicherung traegt beides. */
+    $a = wi_ansage_lesen();
+    foreach (wi_ansage_anlaesse() as $n) {
+        $t .= 'ansage_' . $n . ' ' . $a[$n] . "\n";
+    }
+    $t .= "# Sprachausgabe ohne Sprechtoken (Alexa-NG, Chromecast 4 Lox NG)\n";
+    $t .= 'tts ' . json_encode(ansage_sicherung_bereinigen($a['tts']),
+                               JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
     return $t;
 }
 
@@ -1249,9 +1263,16 @@ function wi_konfig_einlesen($roh)
     $neu = wi_defaults();
     $bekannt = array_keys($neu);
     $gefunden = 0;
+    /* Nr. 36 b (seit 3.1.8): die Sprachausgabe (dritte Rueckgabe). */
+    $ans = array();
+    $tts_roh = null;
     foreach (preg_split('/\R/', (string) $roh) as $z) {
         $t = trim($z);
         if ($t === '' || $t[0] === '#') {
+            continue;
+        }
+        if (preg_match('/^tts(?:\s+(.*))?$/i', $t, $wi_mt)) {
+            $tts_roh = isset($wi_mt[1]) ? $wi_mt[1] : '';
             continue;
         }
         $f = preg_split('/\s+/', $t);
@@ -1269,6 +1290,14 @@ function wi_konfig_einlesen($roh)
             continue;
         }
         $k = strtolower($f[0]);
+        if ($k === 'ansage_stoerung' || $k === 'ansage_ausfall') {
+            if (preg_match('/^[01]$/', $f[1]) !== 1) {
+                $mangel[] = sprintf(wi_t('MELDUNG.SICH_WERT'), wi_e($k), wi_e($f[1]));
+            } else {
+                $ans[substr($k, 7)] = $f[1];
+            }
+            continue;
+        }
         if (!in_array($k, $bekannt, true)) {
             $mangel[] = sprintf(wi_t('MELDUNG.SICH_SCHLUESSEL'), wi_e($k));
             continue;
@@ -1288,6 +1317,26 @@ function wi_konfig_einlesen($roh)
     if ($gefunden === 0) {
         $mangel[] = wi_t('MELDUNG.SICH_LEER');
     }
+    /* Nr. 36 b (seit 3.1.8): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt
+     * die Datei eines (auch als Liste, Zahl oder null), stammt sie nicht aus "Einstellungen
+     * sichern" und wird abgewiesen. Ausgabeart, Adresse und Vorlage wie im Formular (Heimnetz). */
+    if ($tts_roh !== null) {
+        $tj = json_decode($tts_roh, true);
+        if (!is_array($tj)) {
+            $mangel[] = wi_e(wi_t('SPRACHAUSGABE.SICH_TTS_JSON'));
+        } elseif ($tm = ansage_sicherung_mangel($tj)) {
+            $mangel[] = wi_e(sprintf(wi_t('SPRACHAUSGABE.SICH_TTS_TOKEN'), implode(', ', $tm)));
+        } else {
+            $tg = '';
+            $tp = ansage_wert_pruefen($tj, $tg, wi_ansage_modi());
+            if ($tp === null) {
+                $mangel[] = wi_e(sprintf(wi_t('SPRACHAUSGABE.SICH_TTS'),
+                                         ansage_kennung_text($tg, wi_ansage_k())));
+            } else {
+                list($ans['tts']) = ansage_vervollstaendigen($tp, 'aus');
+            }
+        }
+    }
     // O4 (Durchgang 02.10.2026): dieselben Querpruefungen wie das Formular.
     // Bis 3.1.5 wurde eine Sicherung mit Ladesollwert unter dem Normalwert
     // uebernommen (Bericht oberflaeche, O4).
@@ -1296,7 +1345,7 @@ function wi_konfig_einlesen($roh)
             $mangel[] = $q[1];
         }
     }
-    return array($mangel ? null : $neu, $mangel);
+    return array($mangel ? null : $neu, $mangel, $mangel ? null : $ans);
 }
 
 /**
@@ -1786,6 +1835,16 @@ function wi_sicherung_maengel($cfg)
     if (!$aus) {
         foreach (wi_sg_querpruefung($voll) as $q) {
             $aus[] = $q[0];
+        }
+    }
+    /* Nr. 36 b (seit 3.1.8): die Sprachausgabe - Namen, nie Werte, nie ein Token. */
+    $a = wi_ansage_lesen();
+    foreach (ansage_sicherung_x3($a['tts'], wi_ansage_modi()) as $n) {
+        $aus[] = $n;
+    }
+    foreach (wi_ansage_anlaesse() as $n) {
+        if ($a[$n] !== '0' && $a[$n] !== '1') {
+            $aus[] = 'ansage_' . $n;
         }
     }
     return array_values(array_unique($aus));
@@ -2575,4 +2634,405 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
     }
 
     return array('', '', 0);
+}
+
+/* ==================================================================
+ * Sprachausgabe (Nr. 36 b, Stufe 2, seit 3.1.8)
+ *
+ * Die Ausgabe selbst macht die gemeinsame Sprachausgabe der Plugins dieses
+ * Hauses (sprachausgabe.php, Abschrift neben dieser Datei). Hier steht nur,
+ * WANN gesprochen wird und WAS.
+ *
+ * Der Dienst bin/wolf_ism8i.pl ist Perl und spricht nicht selbst. Ein
+ * PHP-Takt (bin/wolf_ansage.php aus cron/cron.05min, neben wolf_sg.php)
+ * liest das Zustandsabbild, das der Dienst schreibt
+ * (data/plugins/<ordner>/zustand.json), und erkennt die Flanke:
+ *   - Stoerung: ein Datenpunkt "Stoerung" (DPT_Switch) wechselt auf "An".
+ *     Je Datenpunkt einmal; erst nach "Aus" und neuem "An" wieder.
+ *   - Ausfall: der Dienst laeuft nicht oder das ISM8 ist nicht verbunden,
+ *     ununterbrochen laenger als wi_ansage_ausfall_grenze(). Einmal je
+ *     Ausfall; erst nach der Rueckkehr und einem neuen Ausfall wieder.
+ * Ein Ausfall des Dienstes ist nur von aussen zu erkennen - deshalb der
+ * Takt und keine Bruecke aus dem Perl-Dienst.
+ *
+ * Die Einstellungen liegen in config/plugins/<ordner>/wolf_ansage.json
+ * (0600): der Block tts (13 Schluessel des Moduls) und je Anlass ein Haken.
+ * NICHT in wolf_ism8i.conf - die liest der Dienst, schreibt jede Zeile
+ * klein und kennt nur "schluessel wert" ohne Leerzeichen; ein Sprechtoken
+ * oder eine Adressvorlage passen dort nicht hinein.
+ *
+ * Ab Werk: Ausgabe aus (D-Regel), beide Haken an - wer die Ausgabe
+ * einschaltet, hoert bei beiden Anlaessen etwas. Sprechtoken nie in Seite,
+ * Sicherung, Protokoll oder Merker; ins Protokoll kommt nur ansage_kurz().
+ * ================================================================== */
+
+/** Ausfall: so lange (s) muss Dienst oder Verbindung ununterbrochen weg sein - drei Takte des Cron. */
+function wi_ansage_ausfall_grenze()
+{
+    return 900;
+}
+
+/** Erlaubte Ausgabearten. Nicht 'audioserver' - Loxone holt hier keinen Text ab. Nicht (noch nicht)
+ *  'sonos4lox': das Modul kennt die Art seit 1.1.0, an dieser Linie ist sie ungemessen (kein Sonos im
+ *  Pruefstand) - wie Intercom 2.2.19 (ic_ansage_modi()). */
+function wi_ansage_modi()
+{
+    return array('aus', 'musicserver', 'ms4h', 'custom', 'alexang', 'cc4lox');
+}
+
+/** Optionen fuer Formular-Baustein und Formular-Lesen. */
+function wi_ansage_opt()
+{
+    return array('modi' => wi_ansage_modi());
+}
+
+/** Die Ansageanlaesse in der Reihenfolge der Oberflaeche. */
+function wi_ansage_anlaesse()
+{
+    return array('stoerung', 'ausfall');
+}
+
+/** Vorgaben: Ausgabe aus, beide Haken an. */
+function wi_ansage_vorgaben()
+{
+    return array('tts' => ansage_vorgaben('aus'), 'stoerung' => '1', 'ausfall' => '1');
+}
+
+function wi_ansage_datei()
+{
+    return dirname(wi_paths()['config']) . '/wolf_ansage.json';
+}
+
+/** Ist die Datei da, aber nicht lesbar (kein JSON-Objekt)? Fuer den Reiter Test. */
+function wi_ansage_datei_kaputt()
+{
+    $f = wi_ansage_datei();
+    if (!is_file($f)) {
+        return false;
+    }
+    $d = json_decode((string) @file_get_contents($f), true);
+    return !is_array($d);
+}
+
+/**
+ * Die Einstellungen der Sprachausgabe, vervollstaendigt (Aktualisierungsfall:
+ * Datei fehlt oder ihr fehlen Schluessel). Werte bleiben, wie sie sind - auch
+ * ungueltige; die meldet X-3 (wi_sicherung_maengel()).
+ */
+function wi_ansage_lesen()
+{
+    $v = wi_ansage_vorgaben();
+    $f = wi_ansage_datei();
+    $d = is_file($f) ? json_decode((string) @file_get_contents($f), true) : null;
+    if (!is_array($d)) {
+        $d = array();
+    }
+    list($tts) = ansage_vervollstaendigen(isset($d['tts']) && is_array($d['tts']) ? $d['tts'] : array(), 'aus');
+    $a = array('tts' => $tts);
+    foreach (wi_ansage_anlaesse() as $n) {
+        $a[$n] = (isset($d[$n]) && is_scalar($d[$n])) ? (string) $d[$n] : $v[$n];
+    }
+    return $a;
+}
+
+/** Schreiben: unteilbar, 0600 (die Datei traegt die Sprechtoken). */
+function wi_ansage_schreiben($a)
+{
+    $aus = array('tts' => $a['tts']);
+    foreach (wi_ansage_anlaesse() as $n) {
+        $aus[$n] = (string) $a[$n];
+    }
+    return wi_json_schreiben(wi_ansage_datei(), $aus, 0600);
+}
+
+/** Der Block tts, vervollstaendigt. */
+function wi_tts()
+{
+    $a = wi_ansage_lesen();
+    return $a['tts'];
+}
+
+/** Ist die Ausgabe eingeschaltet? */
+function wi_ansage_an()
+{
+    $m = wi_tts();
+    return is_string($m['mode']) && $m['mode'] !== 'aus' && in_array($m['mode'], wi_ansage_modi(), true);
+}
+
+/** Der Kontext des Moduls: Webport, Kopfzeile, Ordner fuer <art>_letzte.json, Texte. */
+function wi_ansage_k()
+{
+    $p = wi_paths();
+    $d = $p['home'] !== '' ? $p['home'] . '/data/plugins/' . $p['plugin'] : '';
+    return array(
+        'port'   => ansage_webport(wi_general_json()),
+        /* seit Modul 1.1.0: https-Port (Umleitung an 127.0.0.1) und Wurzel fuer die Plugin-Datenbank
+         * (Ordnername von Alexa-NG/Chromecast); '' = keine Datenbank, feste Ordnernamen. */
+        'sslport' => ansage_sslport(wi_general_json()),
+        'home'   => $p['home'],
+        'kopf'   => array('User-Agent: LoxBerry WOLF ISM NG'),
+        'ordner' => ($d !== '' && @is_dir($d)) ? $d : '',
+        't'      => function ($s) { return wi_t($s); },
+        /* Zu dieser Kennung hat das Modul (1.0.2) keinen Satz in [ANSAGE];
+         * linieneigen wie Intercom 2.2.18, bis der Modulschluessel kommt. */
+        'schluessel' => array('K_TTS_EINTRAG' => 'SPRACHAUSGABE.SICH_TTS_EINTRAG'),
+    );
+}
+
+/** Eine Zeile ins Protokoll des Dienstes - nie Text, nie Token (nur ansage_kurz()). */
+function wi_ansage_log($stufe, $text)
+{
+    $datei = wi_log_file('server');
+    if ($datei === '') {
+        $verz = wi_paths()['logdir'];
+        if ($verz === '' || (!is_dir($verz) && !@mkdir($verz, 0775, true))) {
+            return;
+        }
+        $datei = $verz . '/server.log';
+    }
+    clearstatcache(true, $datei);
+    if (is_file($datei) && filesize($datei) > 512000) {
+        $rest = array_slice(file($datei, FILE_IGNORE_NEW_LINES) ?: array(), -200);
+        @file_put_contents($datei, implode("\n", $rest) . "\n");
+    }
+    @file_put_contents($datei, date('Y-m-d H:i:s') . ' <' . $stufe . '> Ansage: '
+        . preg_replace('/[^\x20-\x7E]/', '?', (string) $text) . "\n", FILE_APPEND);
+}
+
+/** Merker der Flanken: data/plugins/<ordner>/ansage_stand.json. */
+function wi_ansage_stand_datei()
+{
+    $p = wi_paths();
+    if ($p['home'] === '') {
+        return '';
+    }
+    return $p['home'] . '/data/plugins/' . $p['plugin'] . '/ansage_stand.json';
+}
+
+function wi_ansage_stand_lesen()
+{
+    $f = wi_ansage_stand_datei();
+    $d = ($f !== '' && is_file($f)) ? json_decode((string) @file_get_contents($f), true) : null;
+    if (!is_array($d)) {
+        $d = array();
+    }
+    if (!isset($d['stoerung']) || !is_array($d['stoerung'])) {
+        $d['stoerung'] = array();
+    }
+    if (isset($d['ausfall']) && !is_array($d['ausfall'])) {
+        unset($d['ausfall']);
+    }
+    return $d;
+}
+
+/** Geraetename ohne den Klammerzusatz der Datenpunkttabelle ("Heizgeraet 1 (TOB,CGB-2,...)"). */
+function wi_ansage_geraet($g)
+{
+    $g = trim((string) preg_replace('/\s*\([^)]*\)\s*$/u', '', (string) $g));
+    return $g !== '' ? $g : (string) $g;
+}
+
+/**
+ * Die Lage fuer die Ansageanlaesse - ohne Seiteneffekt, damit sie sich
+ * pruefen laesst. $zu: Zustandsabbild (wi_zustand()), $dps: Datenpunkte der
+ * eingestellten Firmware, $dienst: 1 laeuft, 0 laeuft nicht, -1 nicht
+ * feststellbar (kein /proc).
+ * Rueckgabe: array('stoerung' => array(id => array('aktiv' => true|false|null,
+ * 'geraet', 't')), 'code' => array(nr, t) oder null, 'ausfall' => '' |
+ * 'dienst' | 'verbindung').
+ */
+function wi_ansage_lage($zu, $dps, $dienst)
+{
+    $werte = (is_array($zu) && isset($zu['werte']) && is_array($zu['werte'])) ? $zu['werte'] : array();
+    $st = array();
+    foreach ($dps as $d) {
+        if ($d['name'] !== 'Störung' || $d['dpt'] !== 'DPT_Switch') {
+            continue;
+        }
+        $w = isset($werte[(string) $d['id']]) && is_array($werte[(string) $d['id']]) ? $werte[(string) $d['id']] : null;
+        $aktiv = null;   // unbekannt: kein Wert seit dem Start des Dienstes - der Merker bleibt
+        if ($w !== null && isset($w['w'])) {
+            if ($w['w'] === 'An') {
+                $aktiv = true;
+            } elseif ($w['w'] === 'Aus') {
+                $aktiv = false;
+            }
+        }
+        $st[(int) $d['id']] = array('aktiv' => $aktiv, 'geraet' => $d['geraet'],
+                                    't' => ($w !== null && isset($w['t'])) ? (int) $w['t'] : 0);
+    }
+    $code = null;
+    if (isset($werte['372']) && is_array($werte['372']) && isset($werte['372']['w'])
+        && preg_match('/^[0-9]{1,5}$/', (string) $werte['372']['w'])) {
+        $code = array((int) $werte['372']['w'], isset($werte['372']['t']) ? (int) $werte['372']['t'] : 0);
+    }
+    $aus = '';
+    if ($dienst === 0) {
+        $aus = 'dienst';
+    } elseif (!is_array($zu) || !isset($zu['online']) || (int) $zu['online'] !== 1) {
+        $aus = 'verbindung';
+    }
+    return array('stoerung' => $st, 'code' => $code, 'ausfall' => $aus);
+}
+
+/** Der Satz zu neu eingetretenen Stoerungen, mit Stoercode nur, wenn er zur Stoerung gehoert. */
+function wi_ansage_text_stoerung($neu, $code)
+{
+    $namen = array();
+    $t_max = 0;
+    foreach ($neu as $s) {
+        $g = wi_ansage_geraet($s['geraet']);
+        if (!in_array($g, $namen, true)) {
+            $namen[] = $g;
+        }
+        $t_max = max($t_max, (int) $s['t']);
+    }
+    $text = sprintf(wi_t('SPRACHAUSGABE.S_STOERUNG'), implode(', ', $namen));
+    /* Datenpunkt 372 ist der ZULETZT aktive Stoercode. Er kommt nur dazu,
+     * wenn er hoechstens 5 min vor der Stoerung ankam - sonst ist er der
+     * Code einer frueheren Stoerung. Den Klartext gibt es nur mit einer
+     * gewaehlten Tabelle (wi_stoercode()); geraten wird nichts. */
+    if (is_array($code) && $code[0] > 0 && $code[1] >= $t_max - 300) {
+        $klar = wi_stoercode($code[0]);
+        $text .= ' ' . ($klar !== ''
+            ? sprintf(wi_t('SPRACHAUSGABE.S_STOERCODE_TEXT'), $code[0], $klar)
+            : sprintf(wi_t('SPRACHAUSGABE.S_STOERCODE'), $code[0]));
+    }
+    return $text;
+}
+
+/** Der Satz zum Ausfall. */
+function wi_ansage_text_ausfall($grund, $sekunden)
+{
+    $min = max(1, (int) floor($sekunden / 60));
+    return sprintf(wi_t($grund === 'dienst' ? 'SPRACHAUSGABE.S_AUSFALL_DIENST'
+                                            : 'SPRACHAUSGABE.S_AUSFALL_VERBINDUNG'), $min);
+}
+
+/**
+ * Ein Takt (bin/wolf_ansage.php --einmal, alle fuenf Minuten aus cron.05min).
+ * Die Flanken werden immer fortgeschrieben - auch bei ausgeschalteter
+ * Ausgabe oder abgewaehltem Anlass; gesprochen wird nur, wenn beides an ist.
+ * Wer einschaltet, hoert also den NAECHSTEN Eintritt, nicht einen alten.
+ * Rueckgabe: die Protokollzeilen (Kurzform, ohne Text und Token).
+ */
+function wi_ansage_takt($jetzt = null)
+{
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $cfg = wi_config_read();
+    $a = wi_ansage_lesen();
+    $st = wi_ansage_stand_lesen();
+    $vorher = json_encode($st);
+    $pid = is_dir('/proc') ? (int) wi_ism8i_pid() : 0;
+    $dienst = is_dir('/proc') ? ($pid > 0 ? 1 : 0) : -1;
+    $zu = wi_zustand();
+    /* Ein neu gestarteter Dienst schreibt sein Abbild erst bei der ersten
+     * Aenderung; bis dahin steht dort das des vorigen Laufs - mit dessen
+     * "online 1" (in WSL gemessen: nach einem Neustart ohne ISM8 noch nach
+     * 3 s). Hat sich die PID seit dem letzten Takt geaendert, das Abbild aber
+     * nicht (gleicher Start), gilt es als veraltet: die Verbindung ist dann
+     * nicht bestaetigt - sonst verschwiege ein Neustart des LoxBerry mit
+     * totem ISM8 den Ausfall. Ohne /proc (kein Geraet) gibt es keine PID. */
+    $zstart = (is_array($zu) && isset($zu['start'])) ? (int) $zu['start'] : 0;
+    if ($pid > 0 && isset($st['pid']) && (int) $st['pid'] !== $pid
+        && isset($st['start']) && (int) $st['start'] === $zstart) {
+        $st['veraltet'] = $zstart;
+    }
+    if (isset($st['veraltet']) && (int) $st['veraltet'] !== $zstart) {
+        unset($st['veraltet']);
+    }
+    if ($pid > 0) {
+        $st['pid'] = $pid;
+    }
+    $st['start'] = $zstart;
+    $lage = wi_ansage_lage(isset($st['veraltet']) ? null : $zu,
+                           wi_datenpunkte(wi_cfg($cfg, 'fw_version', '1.8')), $dienst);
+    $sagen = array();
+
+    $neu = array();
+    foreach ($lage['stoerung'] as $id => $s) {
+        $k = (string) $id;
+        if ($s['aktiv'] === true) {
+            if (!isset($st['stoerung'][$k])) {
+                $st['stoerung'][$k] = $jetzt;
+                $neu[] = $s;
+            }
+        } elseif ($s['aktiv'] === false) {
+            unset($st['stoerung'][$k]);
+        }
+    }
+    if ($neu) {
+        $sagen['stoerung'] = wi_ansage_text_stoerung($neu, $lage['code']);
+    }
+
+    if ($lage['ausfall'] === '') {
+        unset($st['ausfall']);
+    } elseif (!isset($st['ausfall']['seit'])) {
+        $st['ausfall'] = array('seit' => $jetzt, 'gemeldet' => 0);
+    } elseif ((int) $st['ausfall']['gemeldet'] === 0
+              && $jetzt - (int) $st['ausfall']['seit'] >= wi_ansage_ausfall_grenze()) {
+        $st['ausfall']['gemeldet'] = $jetzt;
+        $sagen['ausfall'] = wi_ansage_text_ausfall($lage['ausfall'], $jetzt - (int) $st['ausfall']['seit']);
+    }
+
+    if (json_encode($st) !== $vorher) {
+        $f = wi_ansage_stand_datei();
+        if ($f !== '') {
+            wi_json_schreiben($f, $st, 0600);
+        }
+    }
+
+    $zeilen = array();
+    $an = wi_ansage_an();
+    foreach ($sagen as $anlass => $text) {
+        if (!$an || $a[$anlass] !== '1') {
+            continue;
+        }
+        $r = ansage_sprechen($text, $a['tts'], wi_ansage_k());
+        $zeilen[] = array($r['stand'] === 0 ? 'WARNING' : 'INFO', $anlass . ': ' . ansage_kurz($r));
+    }
+    return $zeilen;
+}
+
+/** Die Zeilen im Reiter Test: die Ausgabe (Modul) und die Anlaesse. */
+function wi_ansage_pruefzeilen($cfg)
+{
+    $z = array();
+    if (wi_ansage_datei_kaputt()) {
+        $z[] = array(0, wi_t('SPRACHAUSGABE.PZ_AUSGABE'),
+                     sprintf(wi_t('SPRACHAUSGABE.PZ_KAPUTT'), wi_ansage_datei()));
+        return $z;
+    }
+    $a = wi_ansage_lesen();
+    $k = wi_ansage_k();
+    $k['e'] = function ($s) { return (string) $s; };     // der Reiter maskiert selbst
+    list($s, $t) = ansage_pruefzeile($a['tts'], true, $k);
+    $z[] = array($s === 1 ? 1 : ($s === 0 ? 0 : -1), wi_t('SPRACHAUSGABE.PZ_AUSGABE'), $t);
+
+    $namen = array();
+    foreach (wi_ansage_anlaesse() as $n) {
+        if ($a[$n] === '1') {
+            $namen[] = wi_t('SPRACHAUSGABE.N_' . strtoupper($n));
+        }
+    }
+    if (!wi_ansage_an()) {
+        $z[] = array(-1, wi_t('SPRACHAUSGABE.PZ_ANLAESSE'), wi_t('SPRACHAUSGABE.PZ_ANLAESSE_AUS'));
+    } elseif (!$namen) {
+        $z[] = array(-1, wi_t('SPRACHAUSGABE.PZ_ANLAESSE'), wi_t('SPRACHAUSGABE.PZ_ANLAESSE_KEINE'));
+    } elseif (wi_cfg($cfg, 'enable', '0') !== '1') {
+        $z[] = array(-1, wi_t('SPRACHAUSGABE.PZ_ANLAESSE'), wi_t('SPRACHAUSGABE.PZ_ANLAESSE_DIENST_AUS'));
+    } else {
+        $txt = sprintf(wi_t('SPRACHAUSGABE.PZ_ANLAESSE_JA'), implode(', ', $namen),
+                       (int) (wi_ansage_ausfall_grenze() / 60));
+        $st = wi_ansage_stand_lesen();
+        if ($st['stoerung']) {
+            $txt .= ' ' . sprintf(wi_t('SPRACHAUSGABE.PZ_STOERUNG_LAEUFT'), count($st['stoerung']));
+        }
+        if (isset($st['ausfall']['seit'])) {
+            $txt .= ' ' . sprintf(wi_t('SPRACHAUSGABE.PZ_AUSFALL_LAEUFT'),
+                                  wi_alter_text(time() - (int) $st['ausfall']['seit']));
+        }
+        $z[] = array(1, wi_t('SPRACHAUSGABE.PZ_ANLAESSE'), $txt);
+    }
+    return $z;
 }

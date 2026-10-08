@@ -296,7 +296,7 @@ if ($wi_post && isset($_POST['laden'])) {
         $wi_error = wi_t('MELDUNG.SICH_ZU_GROSS');
     } else {
         $roh = (string) @file_get_contents($wi_up['tmp_name']);
-        list($neu, $mangel) = wi_konfig_einlesen($roh);
+        list($neu, $mangel, $wi_ans_s) = wi_konfig_einlesen($roh);
         if ($neu === null) {
             // Eine halb gueltige Datei ueberschreibt NICHTS.
             $wi_beanstandungen = $mangel;
@@ -304,6 +304,18 @@ if ($wi_post && isset($_POST['laden'])) {
         } elseif (wi_config_write($neu)) {
             $wi_saved = true;
             $wi_hinweis = wi_t('MELDUNG.SICH_UEBERNOMMEN') . ' ' . wi_dienst_uebernehmen($neu, null);
+            /* Nr. 36 b (seit 3.1.8): die Sprachausgabe aus der Sicherung. Fehlt sie (Sicherung
+             * vor 3.1.8), gelten ihre Vorgaben - wie fuer jeden anderen fehlenden Schluessel. Die
+             * Sprechtoken traegt keine Sicherung: die geltenden bleiben. */
+            $wi_ajetzt = wi_ansage_lesen();
+            $wi_aneu = wi_ansage_vorgaben();
+            foreach ((array) $wi_ans_s as $wi_ak => $wi_aw) {
+                $wi_aneu[$wi_ak] = $wi_aw;
+            }
+            $wi_aneu['tts'] = ansage_sicherung_tokens_behalten($wi_aneu['tts'], $wi_ajetzt['tts']);
+            if (!wi_ansage_schreiben($wi_aneu)) {
+                $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e(wi_ansage_datei()));
+            }
         } else {
             $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e($wi_p['config']));
         }
@@ -637,6 +649,48 @@ if ($wi_post && isset($_POST['save_mqtt'])) {
     }
 }
 
+/* ============ Speichern: Sprachausgabe - eigener Handler (Nr. 36 b, seit 3.1.8) ============
+ *
+ * Eigenes Formular wie MQTT und SG-Ready. Der Dienst liest diese Einstellungen
+ * nicht (sie liegen in wolf_ansage.json, nicht in wolf_ism8i.conf) - es gibt
+ * keinen Neustart und kein SIGHUP. Jede Beanstandung verhindert das Speichern
+ * (Nr. 16); kein Sprechtoken steht in einer Meldung oder reist zurueck (X-2):
+ * ein leeres Tokenfeld heisst "behalten", der Haken loescht, beides zugleich
+ * ist ein Widerspruch (ansage_formular_lesen()). */
+if ($wi_post && isset($_POST['save_ansage'])) {
+    $wi_tab = 'tab-settings';
+    $wi_av = wi_ansage_lesen();
+    $wi_tmangel = array();
+    $wi_tbean = array();
+    $wi_an = $wi_av;
+    $wi_an['tts'] = ansage_formular_lesen($_POST, $wi_av['tts'], $wi_tmangel, $wi_tbean,
+                                          wi_ansage_opt(), wi_ansage_k());
+    foreach (wi_ansage_anlaesse() as $wi_n) {
+        $wi_an[$wi_n] = isset($_POST['ansage_' . $wi_n]) ? '1' : '0';
+    }
+    foreach ($wi_tmangel as $wi_tm) {
+        $wi_beanstandungen[] = wi_e($wi_tm['text']);
+    }
+    if ($wi_beanstandungen) {
+        $wi_x2w = array();
+        $wi_x2h = array('ansage_stoerung', 'ansage_ausfall');
+        foreach (ansage_x2_felder(wi_ansage_opt()) as $wi_f) {
+            if (substr($wi_f, -9) === '_loeschen') {
+                $wi_x2h[] = $wi_f;
+            } else {
+                $wi_x2w[] = $wi_f;
+            }
+        }
+        $wi_eingaben = array('formular' => 'ansage', 'werte' => wi_eingaben_von($wi_x2w, $wi_x2h),
+                             'falsch' => array_values(array_unique($wi_tbean)));
+    } elseif (wi_ansage_schreiben($wi_an)) {
+        $wi_saved = true;
+        $wi_hinweis = wi_t('SPRACHAUSGABE.GESPEICHERT');
+    } else {
+        $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e(wi_ansage_datei()));
+    }
+}
+
 /* ============ Umleitung (PRG, Bauliste O1) ============
  *
  * JEDER POST endet hier mit 303 - auch einer, den der Wachposten abgewiesen
@@ -801,6 +855,10 @@ $wi_sicherung_mangel = wi_sicherung_maengel($wi_cfg);
 /* Ein beanstandetes Feld (X-2, Regeln/04): rot umrandet, die Eingabe steht darin. */
 .sm-wrap .sm-beanstandet { border: 2px solid #c62828 !important; background: #fff5f5 !important; }
 .sm-wrap input[type=checkbox].sm-beanstandet { outline: 2px solid #c62828; outline-offset: 2px; }
+/* Nr. 36 b (seit 3.1.8): Vorlagenklasse fuer den Formular-Baustein der gemeinsamen Sprachausgabe
+   (VORLAGE_hausstandard.css.html); sm-hilfe und sm-hinweis fuehrt diese Linie schon (Aliase oben). */
+.sm-feld { margin: 14px 0; }
+.sm-feld > label { display: block; font-weight: 600; font-size: 0.9em; color: #555; margin: 0 0 4px; }
 </style>
 <div class="sm-wrap">
 
@@ -972,6 +1030,26 @@ $wi_sicherung_mangel = wi_sicherung_maengel($wi_cfg);
 <div class="sm-small"><?= wi_t('EINST.DPLOG_HINT') ?></div>
 
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save" value="1"><?= wi_t('EINST.SPEICHERN') ?></button>
+</form>
+
+<?php /* Nr. 36 b (Stufe 2, seit 3.1.8): die Sprachausgabe - eigenes Formular mit
+       * eigenem Handler (save_ansage), der Formular-Baustein des gemeinsamen Moduls. */
+$wi_ans = wi_ansage_lesen(); ?>
+<h2><?= wi_e(wi_t('SPRACHAUSGABE.H')) ?></h2>
+<div class="sm-small"><?= wi_e(wi_t('SPRACHAUSGABE.EINLEITUNG')) ?></div>
+<form method="post" action="index.php">
+<input data-role="none" type="hidden" name="activetab" value="tab-settings"><?= wi_fmt() ?>
+<label class="sm-check" style="margin-top:10px;"><input data-role="none" type="checkbox" name="ansage_stoerung" value="1"<?= wi_fh('ansage', 'ansage_stoerung', $wi_ans['stoerung']) ? ' checked' : '' ?>> <?= wi_e(wi_t('SPRACHAUSGABE.L_STOERUNG')) ?></label>
+<div class="sm-small"><?= wi_e(wi_t('SPRACHAUSGABE.L_STOERUNG_HINT')) ?></div>
+<label class="sm-check" style="margin-top:10px;"><input data-role="none" type="checkbox" name="ansage_ausfall" value="1"<?= wi_fh('ansage', 'ansage_ausfall', $wi_ans['ausfall']) ? ' checked' : '' ?>> <?= wi_e(wi_t('SPRACHAUSGABE.L_AUSFALL')) ?></label>
+<div class="sm-small"><?= wi_e(sprintf(wi_t('SPRACHAUSGABE.L_AUSFALL_HINT'), (int) (wi_ansage_ausfall_grenze() / 60))) ?></div>
+<?= ansage_formular_html($wi_ans['tts'], array(
+    'w' => function ($n, $g) { return wi_fw('ansage', $n, $g); },
+    'm' => function ($n) { return wi_fm($n); },
+    'c' => function ($n, $g) { return wi_fh('ansage', $n, $g); },
+    'modi' => wi_ansage_modi()), wi_ansage_k()) ?>
+<div class="sm-small"><?= wi_e(wi_t('SPRACHAUSGABE.TEST_HINWEIS')) ?></div>
+<button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save_ansage" value="1"><?= wi_e(wi_t('SPRACHAUSGABE.SPEICHERN')) ?></button>
 </form>
 
 <h2><?= wi_t('EINST.H_SICHERUNG') ?></h2>
@@ -1411,6 +1489,7 @@ $wi_bt = function ($schluessel, $arg = array()) use ($wi_bnr) {
 </table>
 </div>
 <div class="sm-small" style="margin-top:6px;"><?= $wi_bt('ERLAEUTERUNG') ?></div>
+<div class="sm-small" style="margin-top:6px;"><?= $wi_bt('ANSAGE') ?></div>
 
 <h2><?= wi_t('ARTEN.H') ?></h2>
 <div class="sm-small"><?= wi_t('ARTEN.HINT') ?></div>
@@ -1617,6 +1696,7 @@ foreach ($wi_ids as $wi_id2) {
 <div class="sm-knopfreihe">
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="restart"><?= wi_t('TEST.RESTART') ?></button></form>
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="stop"><?= wi_t('TEST.STOP') ?></button></form>
+<form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="ansage_test"><?= wi_e(wi_t('SPRACHAUSGABE.K_TEST')) ?></button></form>
 </div>
 
 <?php if ($wi_test_titel !== '' && $wi_tab === 'tab-test') { ?>

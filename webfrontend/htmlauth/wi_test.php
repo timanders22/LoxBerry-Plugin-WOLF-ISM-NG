@@ -342,6 +342,11 @@ function wi_pruefzeilen($cfg)
         }
     }
 
+    // --- Nr. 36 b (seit 3.1.8): Sprachausgabe und Ansageanlaesse ----------
+    foreach (wi_ansage_pruefzeilen($cfg) as $wi_az) {
+        $z[] = $wi_az;
+    }
+
     // --- O11: Stimmt die Themenliste mit dem Sendecode ueberein? ----------
     list($ok6, $txt6) = wi_themen_pruefen();
     $z[] = array($ok6 === null ? -1 : ($ok6 ? 1 : 0), wi_t('PZ.THEMEN'), $txt6);
@@ -613,6 +618,20 @@ function wi_test_ausfuehren($was)
     $cfg = wi_config_read();
 
     switch ($was) {
+
+        case 'ansage_test':
+            /* Nr. 36 b (seit 3.1.8): die Testansage. Ins Protokoll nur die Kurzform. */
+            $ak = wi_ansage_k();
+            $r = ansage_testansage(wi_tts(), $ak);
+            wi_ansage_log($r['stand'] === 0 ? 'WARNING' : 'INFO', 'Testansage: ' . ansage_kurz($r));
+            if ($r['stand'] === 1) {
+                $t = wi_t('SPRACHAUSGABE.TEST_OK');
+            } elseif ($r['stand'] === -1) {
+                $t = sprintf(wi_t('SPRACHAUSGABE.TEST_NICHTS'), ansage_kennung_text($r['kennung'], $ak));
+            } else {
+                $t = sprintf(wi_t('SPRACHAUSGABE.TEST_FEHL'), ansage_kennung_text($r['kennung'], $ak));
+            }
+            return array(wi_t('SPRACHAUSGABE.TEST_TITEL'), $t);
 
         case 'status':
             $wd = wi_server_pid();

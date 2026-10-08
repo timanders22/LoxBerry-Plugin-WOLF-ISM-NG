@@ -176,6 +176,20 @@ if [ -x /usr/bin/php ] || command -v php >/dev/null 2>&1; then
     fi
 fi
 
+# --- Sprachausgabe (Nr. 36 b, seit 3.1.8) ---
+#
+# Ansage bei Stoerung und Ausfall. Der Takt liest das Zustandsabbild des
+# Dienstes und spricht nur bei einer Flanke; ab Werk ist die Ausgabe aus,
+# dann schreibt er nur seinen Merker fort. Seine Ergebnisse stehen im
+# Protokoll des Dienstes ("Ansage: ..."), nie der Text und nie ein Token.
+if [ -x /usr/bin/php ] || command -v php >/dev/null 2>&1; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su loxberry -s /bin/sh -c "php '$BINPATH/wolf_ansage.php' --einmal" >/dev/null 2>&1
+    else
+        php "$BINPATH/wolf_ansage.php" --einmal >/dev/null 2>&1
+    fi
+fi
+
 
 wolf_laeuft "$BINPATH/wolf_watchdog.sh" && exit 0
 
