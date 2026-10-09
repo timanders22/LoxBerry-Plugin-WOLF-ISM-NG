@@ -1461,22 +1461,28 @@ $wi_bpunkt = function ($id, $aus) use ($wi_bdp, $wi_bm) {
     return $aus ? sprintf(wi_t('BAUSTEIN.DP_AUS'), $wi_bm($mq . '_setzen'), $wi_bm($ud . ' setzen'))
                 : sprintf(wi_t('BAUSTEIN.DP_EIN'), $wi_bm($mq), $wi_bm($ud));
 };
+/* X-10 (09.10.2026): fuer die Wegzellen "MQTT-Weg: ... UDP-Weg: ..." (Grammatik von
+ * leitungen_setzen.py) beide Namen einzeln: array(MQTT-Name, UDP-Titel). */
+$wi_bpaar = function ($id) use ($wi_bdp, $wi_bm) {
+    if (!isset($wi_bdp[$id])) { $f = wi_t('BAUSTEIN.DP_FEHLT_NAME'); return array($f, $f); }
+    $d = $wi_bdp[$id];
+    return array($wi_bm(str_replace('/', '_', wi_topic($d))), $wi_bm($d['geraet'] . ' ' . $d['name']));
+};
 $wi_bs = array(
     array('B1', 'B1_TYP', array('w', $wi_bv['mqtt_in'][0]), 'B1_PARAM', array(wi_e(wi_t('LOXONE.V_MQTT_IN')), $wi_bm($wi_pre . '_…'), $wi_bm($wi_bv['mqtt_in'][1]), $wi_bm($wi_bv['mqtt_in'][2]), $wi_bm($wi_bv['mqtt_in'][3])), 'B1_EIN', array()),
     array('B2', 'B2_TYP', array('w', $wi_bv['mqtt_out'][0]), 'B2_PARAM', array(wi_e(wi_t('LOXONE.V_MQTT_OUT')), $wi_bm('…_setzen')), 'B2_EIN', array()),
     array('B3', 'B3_TYP', array('w', $wi_bv['udp_in'][0]), 'B3_PARAM', array(wi_e(wi_t('LOXONE.V_UDP_IN')), $wi_bm(wi_cfg($wi_cfg, 'multicast_port', '35353')), $wi_bm($wi_bv['udp_in'][1]), $wi_bm($wi_bv['udp_in'][2]), $wi_bm($wi_bv['udp_in'][3]), $wi_bm('<Kennung>;\\v')), 'B3_EIN', array()),
     array('B4', 'B4_TYP', array('w', $wi_bv['tcp_out'][0]), 'B4_PARAM', array(wi_e(wi_t('LOXONE.V_TCP_OUT')), $wi_bm('tcp://' . $wi_ip . ':' . wi_cfg($wi_cfg, 'input_port', '12005')), $wi_bm('<Kennung>;<v>')), 'B4_EIN', array()),
-    array('B5', 'B5_TYP', array('t', 'B5_NAME'), 'B5_PARAM', array(), 'B5_EIN', array($wi_bpunkt(2, false))),
+    array('B5', 'B5_TYP', array('t', 'B5_NAME'), 'B5_PARAM', array(), 'B5_EIN', $wi_bpaar(2)),
     array('B6', 'B6_TYP', array('t', 'B6_NAME'), 'B6_PARAM', array(), 'B6_EIN', array($wi_bm($wi_bv['mqtt_in'][2]), $wi_bm($wi_bv['udp_in'][2]))),
-    array('B7', 'T_NICHT', array('t', 'B7_NAME'), 'P_KEINE', array(), 'B7_EIN', array()),
     array('B8', 'T_NICHT', array('t', 'B8_NAME'), 'P_KEINE', array(), 'B8_EIN', array($wi_bm($wi_bv['mqtt_in'][1]), $wi_bm($wi_bv['udp_in'][1]))),
     array('B9', 'T_ODER', array('t', 'B9_NAME'), 'P_KEINE', array(), 'B9_EIN', array()),
-    array('B10', 'T_ODER', array('t', 'B10_NAME'), 'B10_PARAM', array($wi_bpunkt(53, false)), 'B10_EIN', array($wi_bpunkt(1, false))),
+    array('B10', 'T_ODER', array('t', 'B10_NAME'), 'B10_PARAM', array($wi_bpunkt(53, false)), 'B10_EIN', $wi_bpaar(1)),
     array('B11', 'B11_TYP', array('t', 'B11_NAME'), 'B11_PARAM', array(), 'B11_EIN', array()),
-    array('B12', 'B12_TYP', array('t', 'B12_NAME'), 'P_KEINE', array(), 'B12_EIN', array($wi_bpunkt(4, false))),
+    array('B12', 'B12_TYP', array('t', 'B12_NAME'), 'P_KEINE', array(), 'B12_EIN', $wi_bpaar(4)),
     array('B13', 'B13_TYP', array('t', 'B13_NAME'), 'B13_PARAM', array(), 'B13_EIN', array($wi_bpunkt(199, true))),
     array('B14', 'B14_TYP', array('t', 'B14_NAME'), 'B14_PARAM', array(), 'B14_EIN', array($wi_bpunkt(58, true))),
-    array('B15', 'B15_TYP', array('t', 'B15_NAME'), 'B15_PARAM', array(), 'B15_EIN', array($wi_bpunkt(195, false))),
+    array('B15', 'B15_TYP', array('t', 'B15_NAME'), 'B15_PARAM', array(), 'B15_EIN', $wi_bpaar(195)),
 );
 $wi_bnr = array();
 foreach ($wi_bs as $wi_i => $wi_z) { $wi_bnr[$wi_z[0]] = $wi_i + 1; }

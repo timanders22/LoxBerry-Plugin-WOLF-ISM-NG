@@ -2773,9 +2773,8 @@ function wi_ansage_k()
         'kopf'   => array('User-Agent: LoxBerry WOLF ISM NG'),
         'ordner' => ($d !== '' && @is_dir($d)) ? $d : '',
         't'      => function ($s) { return wi_t($s); },
-        /* Zu dieser Kennung hat das Modul (1.0.2) keinen Satz in [ANSAGE];
-         * linieneigen wie Intercom 2.2.18, bis der Modulschluessel kommt. */
-        'schluessel' => array('K_TTS_EINTRAG' => 'SPRACHAUSGABE.SICH_TTS_EINTRAG'),
+        /* K_TTS_EINTRAG: den Satz bringt das Modul seit 1.1.2 selbst mit; die Umlenkung auf
+         * SPRACHAUSGABE.SICH_TTS_EINTRAG ist seit 3.1.10 gestrichen (X-10). Ab Werk aus - kein 'werk'. */
     );
 }
 

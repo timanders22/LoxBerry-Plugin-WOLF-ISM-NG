@@ -10,6 +10,28 @@ Plugins dieses Hauses an den Loxone Music Server, MusicServer4Home, eine
 eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (seit 3.1.8, ab Werk
 aus; Adresse und Vorlage nur im Heimnetz, die Sprechtoken in keiner Sicherung).
 
+## Neu in 3.1.10
+
+Baustein-Liste in der Schreibweise des Leitungswerkzeugs, richtiger Baustein für das Lebenszeichen,
+gemeinsame Sprachausgabe 1.1.2.
+
+* **Lebenszeichen über die Analogwertvalidierung:** Die Liste nannte für #6 eine „Änderungsüberwachung“ –
+  diesen Baustein gibt es in Loxone Config nicht. Jetzt: Analogwertvalidierung mit Tmc 300 s, Min 0, Max 999;
+  den Zähler an V, an En eine Konstante 1. Ihr Ausgang error (in Config E) ist EIN, sobald der Zähler steht,
+  und geht direkt ins ODER „Wolf Ausfall“. Das NICHT „Wolf schweigt“ entfällt; die Bausteine danach rücken
+  eine Nummer vor (14 statt 15 Zeilen). Schritt 6 der Einbindung und die Beschreibung des Zählers sagen es ebenso.
+* **Baustein-Liste (Reiter Einbindung in Loxone):** Die Spalte „Eingänge verbinden mit“ nennt die Quellen
+  je Weg in fester Form: `MQTT-Weg: Ausgang von wolf_ng_online (#1). UDP-Weg: Ausgang von Online (#3)`,
+  am Statusbaustein `V1 = …`, an der Analogwertvalidierung `V = …, En = Konstante 1`. Sonst gleiche
+  Bausteine, gleiche Verbindungen.
+* **In Loxone:** Wer die Ausfallerkennung nach der alten Liste gebaut hat, ersetzt den Baustein #6 durch die
+  Analogwertvalidierung und legt ihren Ausgang error statt des NICHT an I1 des ODER.
+* **Sprachausgabe 1.1.2:** gemeinsames Modul und Abschnitt [ANSAGE] mit 157 Sätzen. Den Satz zu einem
+  unbekannten Eintrag im Block der Sprachausgabe bringt jetzt das Modul mit; die eigene Umlenkung ist
+  gestrichen (gleicher Wortlaut). Dazu aus dem Modul: Zeichenzahl bei kaputtem UTF-8 in Zeichen, die
+  Meldung „Port abgewiesen“ nennt das Feld nicht mehr doppelt.
+* Gerendert unter PHP 7.4, 8.4 und 8.5, nicht am Gerät angesehen.
+
 ## Neu in 3.1.9
 
 Kopf wie alle Hausplugins: Statusübersicht über den Reitern, Zusammenfassung oben im ersten Reiter.
@@ -687,7 +709,7 @@ und Störcodes.
 **Lebenszeichen.** `<präfix>/zeitstempel` und `<präfix>/zaehler` gehen bei jedem
 Takt hinaus, auch wenn sich kein Wert geändert hat — sonst wäre der Zeitstempel
 selbst der älteste Wert im Broker. Der Zähler läuft 0…999 um; darauf legt man in
-Loxone eine Änderungsüberwachung. Ohne ihn ist ein toter Dienst von einer ruhigen
+Loxone eine Analogwertvalidierung. Ohne ihn ist ein toter Dienst von einer ruhigen
 Heizung nicht zu unterscheiden. Ab Werk alle 60 s.
 
 **Firmware-Plausibilität.** Unbekannte Datenpunktkennungen werden gezählt und ihr
