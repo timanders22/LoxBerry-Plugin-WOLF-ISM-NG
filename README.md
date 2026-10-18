@@ -10,6 +10,42 @@ Plugins dieses Hauses an den Loxone Music Server, MusicServer4Home, eine
 eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (seit 3.1.8, ab Werk
 aus; Adresse und Vorlage nur im Heimnetz, die Sprechtoken in keiner Sicherung).
 
+## Neu in 3.1.11
+
+Einbindung in Loxone in Vollausstattung: drei Seiten aus dem
+[LoxBerry-Plugins Musterprojekt](https://github.com/timanders22/LoxBerry-Plugins-Musterprojekt) – der gemeinsamen
+Projektdatei mit allen Plugin-Seiten und Vorlagen – mit drei Bildern und je einer Schritt-für-Schritt-Anleitung
+(„So übernehmen Sie diese Seite“). Sie ersetzen die Baustein-Liste B1–B15 im Reiter.
+
+* **Seite „WOLF ISM NG“** (18 Zeilen): läuft es, meldet die Heizung eine Störung – gemeinsame Überwachung am
+  Lebenszeichen `zaehler` (Analogwertvalidierung, Tmc 300 s) und an `online`, 600 s Bestätigung, eigene Meldung
+  „Plugin gestört“; getrennt davon „Heizung gestört“ (Störung von Heizgerät oder Systembedienmodul, 60 s) mit
+  Störcode; Betriebsart des Heizgeräts im Klartext.
+* **Seite „WOLF ISM NG Werte“** (25 Zeilen): Kessel-, Soll-, Rücklauf-, Außen- und Raumtemperatur mit Spreizung,
+  Brenner mit Leistung und Abgas, Warmwasser, Anlagendruck in bar mit Meldung „Anlagendruck niedrig“.
+* **Seite „WOLF ISM NG Bedienung“** (19 Zeilen): Heizkreis- und Warmwasser-Programm über Radiotasten (nur die
+  Werte, die die Heizung annimmt), Warmwasser-Solltemperatur und Sollwertkorrektur als Schieberegler, Rückmeldung,
+  Anzeige des SG-Ready-Moduls.
+* **Berichtigt – wer nach der bisherigen Liste gebaut hat, bitte ansehen:** zwischen ODER und Benachrichtigung
+  fehlte eine Einschaltverzögerung (jede kurze Trennung des ISM8 meldete sofort); die Sammelstörung mischte
+  „LoxBerry/ISM8 weg“ und „Heizung meldet Störung“ in eine Meldung. An der Analogwertvalidierung den Haken bei
+  ‚En‘ im Eigenschaftsfenster entfernen – Config legt En negiert an, sonst prüft sie nie. Typnamen wie in Config
+  (Status, Benachrichtigung, Radiotasten statt „Auswahlschalter“, Schieberegler statt „Analog-Sollwertgeber“).
+* **Eingangsvorlage (MQTT) – nur bei einem Neuimport:** die Grenzen des Anlagendrucks reichen jetzt von −670 000
+  bis 670 000 Pa (bisher ±10 000 Pa – Loxone machte aus jedem üblichen Druck 0). Wer die Vorlage schon importiert
+  hat, setzt am Befehl `wolf_ng_Heizgerät_1_Anlagendruck` unter Validierung „Max“ auf 670000 – ein zweiter Import
+  legt alle Eingänge doppelt an.
+* **Ausgangsvorlagen (MQTT und TCP) – nur bei einem Neuimport:** ganzzahlige Befehle (Betriebsarten, Prozent,
+  Zähler) schicken `<v.0>` statt `<v>`; der Behälter der MQTT-Ausgangsvorlage heißt „Wolf ISM8 MQTT Befehle“
+  (bisher hießen beide MQTT-Behälter „Wolf ISM8 MQTT“). Wer schon importiert hat, ändert die Befehle von Hand –
+  ein zweiter Import legt alle Befehle doppelt an.
+* Vorlagen: der Kommentar des Behälters und der drei Lebenszeichen kommt aus der Sprachdatei, ohne Datum;
+  Titel bleiben in jeder Sprache deutsch.
+* Reiter Einbindung: Schritt 4 nennt den Weg in Loxone Config 17 (Peripherie → Virtuelle Eingänge bzw.
+  Ausgänge → Vorlage importieren), Schritt 5 den Platzhalter `<v.0>`; Hilfe ebenso.
+* Der Dienst, die Themen und die Absicherungen sind unverändert. Gerendert unter PHP 7.4, 8.4 und 8.5, Vorlagen
+  gegen das Musterprojekt geprüft; nicht am Gerät (keine WOLF-Heizung, kein ISM8 im Haus).
+
 ## Neu in 3.1.10
 
 Baustein-Liste in der Schreibweise des Leitungswerkzeugs, richtiger Baustein für das Lebenszeichen,

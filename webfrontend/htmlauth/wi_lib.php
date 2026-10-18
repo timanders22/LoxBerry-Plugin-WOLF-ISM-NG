@@ -2254,7 +2254,10 @@ function wi_grenzen($dpt, $einheit)
         'DPT_Value_2_Ucount'     => array(0, 65535, 0, true),
         'DPT_Value_Temp'         => array(-60, 250, 1, true),
         'DPT_Value_Tempd'        => array(-100, 100, 1, true),
-        'DPT_Value_Pres'         => array(-10000, 10000, 1, true),
+        // Welle Bild 20 (3.1.11, E9, Festlegung des Hausherrn 18.10.2026): bis 3.1.10 -10000..10000 - der
+        // Dienst liefert Pa (1,5 bar = 150000 Pa), Loxone machte aus jedem Wert ueber MaxVal 0. Wirkt nur bei
+        // einem Neuimport der Eingangsvorlage; bestehende Importe: Max am Befehl von Hand.
+        'DPT_Value_Pres'         => array(-670000, 670000, 1, true),
         'DPT_Power'              => array(-100, 1000, 1, true),
         'DPT_Value_Volume_Flow'  => array(0, 65535, 1, true),
         'DPT_FlowRate_m3/h'      => array(0, 1000, 2, true),
@@ -2283,12 +2286,16 @@ function wi_grenzen($dpt, $einheit)
  * EINGAENGE, die Loxone in einem Ausgang nicht ersetzt; der Dienst wies den
  * Text ab (Bericht oberflaeche, O12). mqtt_out schrieb <v.0> und schnitt
  * damit die 0,5-K-Schritte ab.
+ * Welle Bild 20 (3.1.11, E12): ganzzahlige Befehle (Betriebsarten, Prozent,
+ * Zaehler) bekommen <v.0> statt des blanken <v> - der Dienst nimmt
+ * Betriebsarten nur als ganze Zahl ("^\d+$"), und was Loxone fuer <v>
+ * schickt, ist nicht gemessen. Wirkt nur bei einem Neuimport.
  */
 function wi_platzhalter($dpt)
 {
     $g = array('DPT_Value_Temp' => 1, 'DPT_Value_Tempd' => 1, 'DPT_Value_Pres' => 1,
                'DPT_Power' => 1, 'DPT_Value_Volume_Flow' => 1, 'DPT_FlowRate_m3/h' => 2);
-    return isset($g[$dpt]) ? '<v.' . $g[$dpt] . '>' : '<v>';
+    return isset($g[$dpt]) ? '<v.' . $g[$dpt] . '>' : '<v.0>';
 }
 
 /** Ein Attribut nur schreiben, wenn es einen Wert hat. */
@@ -2447,10 +2454,9 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
 {
     $dps = wi_datenpunkte(wi_cfg($cfg, 'fw_version', '1.8'));
     $ip = wi_localip();
-    // Monat ist einstellig gezaehlt korrekt - die alte Perl-Fassung nahm
-    // localtime()[4] ohne +1 und schrieb dadurch stets den Vormonat.
-    $stempel = date('d.m.Y');
-    $fuss = 'Erzeugt vom LoxBerry-Plugin Wolf ISM8 (' . $stempel . ')';
+    // Welle Bild 20 (3.1.11, E15): Kommentar des Behaelters aus der Sprachdatei, ohne Datum (wie die
+    // Vorlagen im LoxBerry-Plugins Musterprojekt; bis 3.1.10 fest deutsch mit dem Tag der Erzeugung).
+    $fuss = wi_t('LOXONE.VORLAGE_KOMMENTAR');
 
     $gewaehlt = function ($d) use ($geraete, $nurgesehen) {
         if (!in_array($d['geraet'], $geraete, true)) {
@@ -2548,15 +2554,15 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
         $pre = wi_cfg($cfg, 'praefix', 'wolf_ng');
         $cmds = array(
             array('title' => $pre . '_online',
-                  'comment' => 'Zustand der ISM8-Verbindung',
+                  'comment' => wi_t('LOXONE.K_ONLINE'),
                   'check' => ' ', 'min' => '0', 'max' => '1',
                   'unit' => '<v>', 'analog' => false),
             array('title' => $pre . '_zaehler',
-                  'comment' => 'Lebenszeichen, 0..999 umlaufend',
+                  'comment' => wi_t('LOXONE.K_ZAEHLER'),
                   'check' => ' ', 'min' => '0', 'max' => '999',
                   'unit' => '<v>', 'analog' => true),
             array('title' => $pre . '_zeitstempel',
-                  'comment' => 'Unix-Zeit des letzten Lebenszeichens',
+                  'comment' => wi_t('LOXONE.K_ZEIT'),
                   'check' => ' ', 'min' => '0', 'max' => '2147483647',
                   'unit' => '<v>', 'analog' => true),
         );
@@ -2605,7 +2611,8 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
             $titel = str_replace('/', '_', $thema) . '_setzen';
             $cmds[] = $analog
                 ? array(
-                    // O12: Platzhalter je Typ (wi_platzhalter), nicht <v.0>.
+                    // O12: Platzhalter je Typ (wi_platzhalter): <v.1>/<v.2> bei Nachkommastellen,
+                    // seit 3.1.11 (E12) <v.0> an ganzzahligen Befehlen statt <v>.
                     // M5 (Durchgang 02.10.2026): publish statt retain. Der
                     // Befehl lag bis 3.1.5 retained auf DEMSELBEN Thema, auf
                     // dem der Dienst den Istwert meldet; nach einem Neustart
@@ -2627,7 +2634,9 @@ function wi_vorlage($art, $cfg, $geraete, $nurgesehen = null)
                   );
         }
         return array('wolf_mqtt_output.xml', wi_xml_virtual_out(array(
-            'title'   => 'Wolf ISM8 MQTT',
+            // Welle Bild 20 (3.1.11, E4): eigener Titel - bis 3.1.10 hiessen Eingangs- und Ausgangsvorlage
+            // gleich (zwei Behaelter verschiedener Art mit demselben Namen im Baum). Nur bei Neuimport.
+            'title'   => 'Wolf ISM8 MQTT Befehle',
             'address' => '/dev/udp/' . $ip . '/' . $port,
             'comment' => $fuss,
         ), $cmds), count($cmds));

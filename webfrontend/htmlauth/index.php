@@ -796,6 +796,14 @@ $wi_sicherung_mangel = wi_sicherung_maengel($wi_cfg);
 
 /* --- Einheitliches Kachel-Raster im Reiter Test (Hausstandard) --- */
 .sm-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
+/* Welle Bild 20 (3.1.11): Seiten, Schritte, Hinweise und Bild je Baustein-Liste (Bauart Midea2Lox 4.5.15). */
+.sm-wrap h4.sm-h4 { color: #4f7d17; font-size: 0.98em; font-weight: 700; margin: 22px 0 4px;
+    padding-top: 10px; border-top: 1px solid #e0e0e0; }
+.sm-schritte { margin: 6px 0 0 18px; padding: 0; }
+.sm-schritte li { margin: 3px 0; }
+.sm-bild { margin: 12px 0; }
+.sm-bild img { max-width: 100%; height: auto; border: 1px solid #ccc; border-radius: 4px; background: #fff; }
+.sm-bild figcaption { font-size: .9em; color: #555; margin-top: 4px; }
 .sm-knopfreihe { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 4px; align-items: stretch; }
 .sm-knopfreihe form { margin: 0; display: flex; }
 .sm-knopfreihe .sm-btn { flex: 0 0 auto; min-width: 250px; text-align: center;
@@ -1434,77 +1442,226 @@ $wi_sgm = wi_sg_merker();
 <div class="sm-small"><?= wi_t('LOXONE.V_UDP_HINT') ?></div>
 </form>
 
-<?php /* X-8 (G4, 02.10.2026, Entscheidung 36): die Liste nennt die vier Vorlagen und
-         deren Eingaenge mit den Titeln, die wi_vorlage() vergibt - aus deren Ausgabe
-         gelesen, nicht abgeschrieben -, und Beispielnamen der Datenpunkte aus der
-         Datenpunkttabelle der eingestellten Firmware (MQTT-Name wie wi_vorlage:
-         wi_topic(), "/" -> "_"; UDP/TCP-Titel "<Geraet> <Name>"). Regel A4: die
-         Sammelstoerung ist eine ODER-Kaskade mit je zwei Eingaengen.
-         Zeile: array(Kennung, Typ, Name, Parameter, Argumente, Verbindung, Argumente);
-         Name als array('t', Schluessel) oder array('w', fertiger Wert). {Bn} -> #n. */
-$wi_bv = array();
-foreach (array('mqtt_in', 'mqtt_out', 'udp_in', 'tcp_out') as $wi_a) {
-    $wi_x = wi_vorlage($wi_a, $wi_cfg, array());
-    preg_match_all('/ Title="([^"]*)"/', (string) $wi_x[1], $wi_m);
-    $wi_bv[$wi_a] = array();
-    foreach ($wi_m[1] as $wi_t1) { $wi_bv[$wi_a][] = html_entity_decode($wi_t1, ENT_QUOTES, 'UTF-8'); }
-    $wi_bv[$wi_a] += array('', '', '', '');
+<?php
+/**
+ * Die Baustein-Listen des Reiters - Welle Bild 20 (3.1.11, Hausherr 11.10.2026: Vollausstattung, ein absoluter
+ * Laie soll das Maximum leicht uebernehmen koennen; Entwurf Welle 20 wo, E1-E17, 18.10.2026). DREI Seiten wie im
+ * LoxBerry-Plugins Musterprojekt (Musterprojekt/baustein_listen.txt, Abschnitte "WOLF ISM NG" 18, "WOLF ISM NG
+ * Werte" 25, "WOLF ISM NG Bedienung" 19 Zeilen). Bis 3.1.10 stand hier EINE Liste B1-B15 (beide Wege in einer
+ * Zelle). Berichtigt gegen sie: zwischen ODER und Benachrichtigung fehlte die Einschaltverzoegerung (jede kurze
+ * ISM8-Trennung meldete sofort); die Sammelstoerung mischte "LoxBerry/ISM8 weg" und "Heizung meldet Stoerung";
+ * Typnamen wie in Config (Status, Benachrichtigung, Radiotasten, Schieberegler statt Statusbaustein, Analog-
+ * Sollwertgeber, Auswahlschalter, Statistik); der GLT-Eingriff Kesselsolltemperaturvorgabe ist entfallen.
+ *
+ * Jede Zeile ist EIN Sprachschluessel BAUSTEIN.Z<Seite>_<Nr> "Typ | Name | Parameter | Eingaenge" (Zeilen mit
+ * Prozentzeichen dort doppelt und ueber sprintf() geholt, angezeigt mit einem; deutsch wortgleich mit der Liste;
+ * Bausteinnamen auch englisch deutsch). DIE NAMEN WERDEN GERECHNET, NICHT ABGESCHRIEBEN, wie wi_vorlage() sie
+ * bildet: 'pre' = Praefix + Thema (online, zaehler, SG-Themen), 'dp' = Datenpunkt dieser Kennung aus der
+ * eingestellten Firmware (wi_topic_pre(), '/' -> '_'), 'kr' = Datenpunkt des Heizkreises aus dem Reiter SG-Ready
+ * (wi_sg_punkte(); ab Werk "direkt"), bei Befehlen mit "_setzen". Fehlt der Datenpunkt in der Firmware, steht
+ * BAUSTEIN.NAME_FEHLT da. Mit Firmware 1.8, Praefix wolf_ng und Kreis direkt steht genau der Name der Liste da.
+ *
+ * Rueckgabe: Liste von array('seite', 'bild', 'zeilen' => array(array(Nr, Typ, Name, Parameter, Eingaenge),
+ * ...), 'schritte', 'hinweise'). Zellen und Schritte sind Klartext (unten maskiert), die Hinweise
+ * freigegebenes HTML aus der Sprachdatei.
+ */
+function wi_bausteinliste($cfg, $dps)
+{
+    $kx = array('pre' => wi_cfg($cfg, 'praefix', 'wolf_ng'), 'fw' => wi_cfg($cfg, 'fw_version', '1.8'),
+                'dp' => array(), 'kr' => array());
+    foreach ($dps as $d) {
+        $kx['dp'][(int) $d['id']] = $d;
+    }
+    $kreise = wi_sg_kreise();
+    $kreis = wi_cfg($cfg, 'sg_kreis', 'direkt');
+    if (!isset($kreise[$kreis])) {
+        $kreis = 'direkt';
+    }
+    foreach (wi_sg_punkte($cfg, $kreis) as $k => $p) {
+        $kx['kr'][$k] = (int) $p['id'];
+    }
+    foreach ($dps as $d) {   // die Raumtemperatur des Kreises ist nur lesbar, wi_sg_punkte() kennt sie nicht
+        if ($d['geraet'] === $kreise[$kreis] && $d['name'] === 'Raumtemperatur') {
+            $kx['kr']['raum'] = (int) $d['id'];
+        }
+    }
+    // Seitenname (= Config-Seite im Musterprojekt, deshalb fest), Bild, Zeilen, Kasten, Hinweise
+    $seiten = array(
+        array('WOLF ISM NG', 'einbindung_loxone.png', array(
+            array(wi_t('BAUSTEIN.Z1_01'), array('pre', 'zaehler')),
+            array(wi_t('BAUSTEIN.Z1_02'), array('pre', 'online')),
+            array(wi_t('BAUSTEIN.Z1_03')),
+            array(wi_t('BAUSTEIN.Z1_04')),
+            array(wi_t('BAUSTEIN.Z1_05')),
+            array(wi_t('BAUSTEIN.Z1_06')),
+            array(wi_t('BAUSTEIN.Z1_07')),
+            array(wi_t('BAUSTEIN.Z1_08')),
+            array(wi_t('BAUSTEIN.Z1_09')),
+            array(wi_t('BAUSTEIN.Z1_10'), array('dp', 1)),
+            array(wi_t('BAUSTEIN.Z1_11'), array('dp', 53)),
+            array(wi_t('BAUSTEIN.Z1_12'), array('dp', 372)),
+            array(wi_t('BAUSTEIN.Z1_13')),
+            array(wi_t('BAUSTEIN.Z1_14')),
+            array(wi_t('BAUSTEIN.Z1_15')),
+            array(wi_t('BAUSTEIN.Z1_16')),
+            array(wi_t('BAUSTEIN.Z1_17'), array('dp', 2)),
+            array(wi_t('BAUSTEIN.Z1_18')),
+        ), array(
+            'BAUSTEIN.SEITE1_SCHRITT1',
+            'BAUSTEIN.SEITE1_SCHRITT2',
+            'BAUSTEIN.SEITE1_SCHRITT3',
+            'BAUSTEIN.SEITE1_SCHRITT4',
+            'BAUSTEIN.SEITE1_SCHRITT5',
+            'BAUSTEIN.SEITE1_SCHRITT6',
+        ), array(
+            'BAUSTEIN.SEITE1_H1',
+            'BAUSTEIN.SEITE1_H2',
+            'BAUSTEIN.SEITE1_H3',
+            'BAUSTEIN.SEITE1_H4',
+            'BAUSTEIN.SEITE1_H5',
+            'BAUSTEIN.SEITE1_H6',
+            'BAUSTEIN.SEITE1_H7',
+        )),
+        array('WOLF ISM NG Werte', 'einbindung_loxone_werte.png', array(
+            array(wi_t('BAUSTEIN.Z2_01'), array('dp', 4)),
+            array(wi_t('BAUSTEIN.Z2_02'), array('dp', 364)),
+            array(wi_t('BAUSTEIN.Z2_03'), array('dp', 6)),
+            array(wi_t('BAUSTEIN.Z2_04')),
+            array(wi_t('BAUSTEIN.Z2_05'), array('dp', 8)),
+            array(wi_t('BAUSTEIN.Z2_06'), array('kr', 'raum', '')),
+            array(sprintf(wi_t('BAUSTEIN.Z2_07')), array('dp', 3)),
+            array(wi_t('BAUSTEIN.Z2_08'), array('dp', 9)),
+            array(wi_t('BAUSTEIN.Z2_09'), array('dp', 10)),
+            array(wi_t('BAUSTEIN.Z2_10')),
+            array(wi_t('BAUSTEIN.Z2_11'), array('dp', 197)),
+            array(sprintf(wi_t('BAUSTEIN.Z2_12'))),
+            array(wi_t('BAUSTEIN.Z2_13'), array('dp', 7)),
+            array(wi_t('BAUSTEIN.Z2_14'), array('kr', 'ww_soll', '')),
+            array(wi_t('BAUSTEIN.Z2_15'), array('dp', 11)),
+            array(wi_t('BAUSTEIN.Z2_16'), array('kr', 'ww_modus', '')),
+            array(wi_t('BAUSTEIN.Z2_17')),
+            array(wi_t('BAUSTEIN.Z2_18'), array('dp', 13)),
+            array(wi_t('BAUSTEIN.Z2_19')),
+            array(wi_t('BAUSTEIN.Z2_20')),
+            array(wi_t('BAUSTEIN.Z2_21')),
+            array(wi_t('BAUSTEIN.Z2_22')),
+            array(wi_t('BAUSTEIN.Z2_23')),
+            array(wi_t('BAUSTEIN.Z2_24')),
+            array(wi_t('BAUSTEIN.Z2_25')),
+        ), array(
+            'BAUSTEIN.SEITE2_SCHRITT1',
+            'BAUSTEIN.SEITE2_SCHRITT2',
+            'BAUSTEIN.SEITE2_SCHRITT3',
+            'BAUSTEIN.SEITE2_SCHRITT4',
+            'BAUSTEIN.SEITE2_SCHRITT5',
+        ), array(
+            'BAUSTEIN.SEITE2_H1',
+            'BAUSTEIN.SEITE2_H2',
+            'BAUSTEIN.SEITE2_H3',
+            'BAUSTEIN.SEITE2_H4',
+            'BAUSTEIN.SEITE2_H5',
+        )),
+        array('WOLF ISM NG Bedienung', 'einbindung_loxone_bedienung.png', array(
+            array(wi_t('BAUSTEIN.Z3_01')),
+            array(wi_t('BAUSTEIN.Z3_02')),
+            array(wi_t('BAUSTEIN.Z3_03'), array('kr', 'hk_modus', '_setzen')),
+            array(wi_t('BAUSTEIN.Z3_04')),
+            array(wi_t('BAUSTEIN.Z3_05')),
+            array(wi_t('BAUSTEIN.Z3_06'), array('kr', 'ww_modus', '_setzen')),
+            array(wi_t('BAUSTEIN.Z3_07')),
+            array(wi_t('BAUSTEIN.Z3_08'), array('kr', 'ww_soll', '_setzen')),
+            array(wi_t('BAUSTEIN.Z3_09')),
+            array(wi_t('BAUSTEIN.Z3_10'), array('kr', 'korrektur', '_setzen')),
+            array(wi_t('BAUSTEIN.Z3_11'), array('kr', 'hk_modus', '')),
+            array(wi_t('BAUSTEIN.Z3_12'), array('kr', 'korrektur', '')),
+            array(wi_t('BAUSTEIN.Z3_13')),
+            array(wi_t('BAUSTEIN.Z3_14'), array('pre', 'sg_laden')),
+            array(wi_t('BAUSTEIN.Z3_15'), array('pre', 'sg_dimmen')),
+            array(wi_t('BAUSTEIN.Z3_16'), array('pre', 'sg_fenster')),
+            array(wi_t('BAUSTEIN.Z3_17'), array('pre', 'sg_naechster_preis')),
+            array(wi_t('BAUSTEIN.Z3_18'), array('pre', 'sg_lage')),
+            array(wi_t('BAUSTEIN.Z3_19')),
+        ), array(
+            'BAUSTEIN.SEITE3_SCHRITT1',
+            'BAUSTEIN.SEITE3_SCHRITT2',
+            'BAUSTEIN.SEITE3_SCHRITT3',
+            'BAUSTEIN.SEITE3_SCHRITT4',
+            'BAUSTEIN.SEITE3_SCHRITT5',
+        ), array(
+            'BAUSTEIN.SEITE3_H1',
+            'BAUSTEIN.SEITE3_H2',
+            'BAUSTEIN.SEITE3_H3',
+            'BAUSTEIN.SEITE3_H4',
+            'BAUSTEIN.SEITE3_H5',
+            'BAUSTEIN.SEITE3_H6',
+            'BAUSTEIN.SEITE3_H7',
+        )),
+    );
+    $aus = array();
+    foreach ($seiten as $wi_s) {
+        $wi_zeilen = array();
+        foreach ($wi_s[2] as $wi_i => $wi_z) {
+            $wi_c = array_pad(explode(' | ', $wi_z[0], 4), 4, '');
+            if (isset($wi_z[1])) {
+                $wi_c[1] = wi_baustein_name($wi_z[1], $kx);
+            }
+            $wi_zeilen[] = array_merge(array($wi_i + 1), $wi_c);
+        }
+        $aus[] = array('seite' => $wi_s[0], 'bild' => $wi_s[1], 'zeilen' => $wi_zeilen,
+                       'schritte' => array_map('wi_t', $wi_s[3]), 'hinweise' => array_map('wi_t', $wi_s[4]));
+    }
+    return $aus;
 }
-$wi_bdp = array();
-foreach ($wi_dps as $wi_d) { $wi_bdp[(int) $wi_d['id']] = $wi_d; }
-$wi_bm = function ($t) { return '<span class="sm-mono">' . wi_e($t) . '</span>'; };
-$wi_bpunkt = function ($id, $aus) use ($wi_bdp, $wi_bm) {
-    if (!isset($wi_bdp[$id])) { return wi_t('BAUSTEIN.DP_FEHLT'); }
-    $d = $wi_bdp[$id];
-    $mq = str_replace('/', '_', wi_topic($d));
-    $ud = $d['geraet'] . ' ' . $d['name'];
-    return $aus ? sprintf(wi_t('BAUSTEIN.DP_AUS'), $wi_bm($mq . '_setzen'), $wi_bm($ud . ' setzen'))
-                : sprintf(wi_t('BAUSTEIN.DP_EIN'), $wi_bm($mq), $wi_bm($ud));
-};
-/* X-10 (09.10.2026): fuer die Wegzellen "MQTT-Weg: ... UDP-Weg: ..." (Grammatik von
- * leitungen_setzen.py) beide Namen einzeln: array(MQTT-Name, UDP-Titel). */
-$wi_bpaar = function ($id) use ($wi_bdp, $wi_bm) {
-    if (!isset($wi_bdp[$id])) { $f = wi_t('BAUSTEIN.DP_FEHLT_NAME'); return array($f, $f); }
-    $d = $wi_bdp[$id];
-    return array($wi_bm(str_replace('/', '_', wi_topic($d))), $wi_bm($d['geraet'] . ' ' . $d['name']));
-};
-$wi_bs = array(
-    array('B1', 'B1_TYP', array('w', $wi_bv['mqtt_in'][0]), 'B1_PARAM', array(wi_e(wi_t('LOXONE.V_MQTT_IN')), $wi_bm($wi_pre . '_…'), $wi_bm($wi_bv['mqtt_in'][1]), $wi_bm($wi_bv['mqtt_in'][2]), $wi_bm($wi_bv['mqtt_in'][3])), 'B1_EIN', array()),
-    array('B2', 'B2_TYP', array('w', $wi_bv['mqtt_out'][0]), 'B2_PARAM', array(wi_e(wi_t('LOXONE.V_MQTT_OUT')), $wi_bm('…_setzen')), 'B2_EIN', array()),
-    array('B3', 'B3_TYP', array('w', $wi_bv['udp_in'][0]), 'B3_PARAM', array(wi_e(wi_t('LOXONE.V_UDP_IN')), $wi_bm(wi_cfg($wi_cfg, 'multicast_port', '35353')), $wi_bm($wi_bv['udp_in'][1]), $wi_bm($wi_bv['udp_in'][2]), $wi_bm($wi_bv['udp_in'][3]), $wi_bm('<Kennung>;\\v')), 'B3_EIN', array()),
-    array('B4', 'B4_TYP', array('w', $wi_bv['tcp_out'][0]), 'B4_PARAM', array(wi_e(wi_t('LOXONE.V_TCP_OUT')), $wi_bm('tcp://' . $wi_ip . ':' . wi_cfg($wi_cfg, 'input_port', '12005')), $wi_bm('<Kennung>;<v>')), 'B4_EIN', array()),
-    array('B5', 'B5_TYP', array('t', 'B5_NAME'), 'B5_PARAM', array(), 'B5_EIN', $wi_bpaar(2)),
-    array('B6', 'B6_TYP', array('t', 'B6_NAME'), 'B6_PARAM', array(), 'B6_EIN', array($wi_bm($wi_bv['mqtt_in'][2]), $wi_bm($wi_bv['udp_in'][2]))),
-    array('B8', 'T_NICHT', array('t', 'B8_NAME'), 'P_KEINE', array(), 'B8_EIN', array($wi_bm($wi_bv['mqtt_in'][1]), $wi_bm($wi_bv['udp_in'][1]))),
-    array('B9', 'T_ODER', array('t', 'B9_NAME'), 'P_KEINE', array(), 'B9_EIN', array()),
-    array('B10', 'T_ODER', array('t', 'B10_NAME'), 'B10_PARAM', array($wi_bpunkt(53, false)), 'B10_EIN', $wi_bpaar(1)),
-    array('B11', 'B11_TYP', array('t', 'B11_NAME'), 'B11_PARAM', array(), 'B11_EIN', array()),
-    array('B12', 'B12_TYP', array('t', 'B12_NAME'), 'P_KEINE', array(), 'B12_EIN', $wi_bpaar(4)),
-    array('B13', 'B13_TYP', array('t', 'B13_NAME'), 'B13_PARAM', array(), 'B13_EIN', array($wi_bpunkt(199, true))),
-    array('B14', 'B14_TYP', array('t', 'B14_NAME'), 'B14_PARAM', array(), 'B14_EIN', array($wi_bpunkt(58, true))),
-    array('B15', 'B15_TYP', array('t', 'B15_NAME'), 'B15_PARAM', array(), 'B15_EIN', $wi_bpaar(195)),
-);
-$wi_bnr = array();
-foreach ($wi_bs as $wi_i => $wi_z) { $wi_bnr[$wi_z[0]] = $wi_i + 1; }
-$wi_bt = function ($schluessel, $arg = array()) use ($wi_bnr) {
-    $t = (string) wi_t('BAUSTEIN.' . $schluessel);
-    $t = $arg ? vsprintf($t, $arg) : $t;
-    return preg_replace_callback('/\{(B\d+)\}/', function ($m) use ($wi_bnr) {
-        return isset($wi_bnr[$m[1]]) ? '#' . $wi_bnr[$m[1]] : $m[0];
-    }, $t);
-}; ?>
-<h2><?= wi_t('BAUSTEIN.H') ?></h2>
-<div class="sm-small"><?= wi_t('BAUSTEIN.EINLEITUNG') ?></div>
+
+/** Name einer Listenzeile mit eigenem Praefix, eigener Firmware und eigenem Heizkreis (siehe oben). */
+function wi_baustein_name($art, $kx)
+{
+    if ($art[0] === 'pre') {
+        return $kx['pre'] . '_' . $art[1];
+    }
+    $id = $art[0] === 'dp' ? (int) $art[1] : (isset($kx['kr'][$art[1]]) ? $kx['kr'][$art[1]] : 0);
+    if (!isset($kx['dp'][$id])) {
+        return sprintf(wi_t('BAUSTEIN.NAME_FEHLT'), $kx['fw']);
+    }
+    return str_replace('/', '_', wi_topic_pre($kx['pre'], $kx['dp'][$id])) . ($art[0] === 'kr' ? $art[2] : '');
+}
+
+/** Eine Seite: Ueberschrift (= Seitenname in Config), Kasten, Tabelle, Hinweise, Bild, Link. */
+function wi_bausteinseite_zeigen($wi_bs)
+{ ?>
+<h4 class="sm-h4"><?= wi_e($wi_bs['seite']) ?></h4>
+<div class="sm-hinweis"><b><?= wi_e(wi_t('BAUSTEIN.SCHRITTE_TITEL')) ?></b>
+<ol class="sm-schritte">
+<?php foreach ($wi_bs['schritte'] as $wi_bx) { ?>
+<li><?= wi_e($wi_bx) ?></li>
+<?php } ?>
+</ol></div>
 <div class="sm-breit">
 <table class="sm-tbl">
 <tr><th style="width:32px;">#</th><th><?= wi_t('BAUSTEIN.TH_TYP') ?></th><th><?= wi_t('BAUSTEIN.TH_NAME') ?></th><th><?= wi_t('BAUSTEIN.TH_PARAM') ?></th><th><?= wi_t('BAUSTEIN.TH_EINGANG') ?></th></tr>
-<?php foreach ($wi_bs as $wi_i => $wi_z) { ?>
-<tr><td><?= $wi_i + 1 ?></td><td><?= $wi_bt($wi_z[1]) ?></td><td><span class="sm-mono"><?= $wi_z[2][0] === 'w' ? wi_e($wi_z[2][1]) : $wi_bt($wi_z[2][1]) ?></span></td><td><?= $wi_bt($wi_z[3], $wi_z[4]) ?></td><td><?= $wi_bt($wi_z[5], $wi_z[6]) ?></td></tr>
+<?php foreach ($wi_bs['zeilen'] as $wi_bz) { ?>
+<tr><td><?= (int) $wi_bz[0] ?></td><td><?= wi_e($wi_bz[1]) ?></td><td><span class="sm-mono"><?= wi_e($wi_bz[2]) ?></span></td><td><?= wi_e($wi_bz[3]) ?></td><td><?= wi_e($wi_bz[4]) ?></td></tr>
 <?php } ?>
 </table>
 </div>
-<div class="sm-small" style="margin-top:6px;"><?= $wi_bt('ERLAEUTERUNG') ?></div>
-<div class="sm-small" style="margin-top:6px;"><?= $wi_bt('ANSAGE') ?></div>
+<div class="sm-warnung"><b><?= wi_e(wi_t('BAUSTEIN.HINWEISE_TITEL')) ?></b>
+<ul class="sm-schritte">
+<?php foreach ($wi_bs['hinweise'] as $wi_bx) { ?>
+<li><?= $wi_bx ?></li>
+<?php } ?>
+</ul></div>
+<figure class="sm-bild">
+<img src="<?= wi_e($wi_bs['bild']) ?>" alt="<?= wi_e(sprintf(wi_t('BAUSTEIN.BILD_ALT'), $wi_bs['seite'])) ?>" loading="lazy">
+<figcaption><?= wi_e(sprintf(wi_t('BAUSTEIN.BILD_UNTERSCHRIFT'), $wi_bs['seite'])) ?></figcaption>
+</figure>
+<div class="sm-small"><?= wi_t('BAUSTEIN.MUSTERPROJEKT') ?></div>
+<?php } ?>
+<h2><?= wi_t('BAUSTEIN.H') ?></h2>
+<div class="sm-small"><?= wi_t('BAUSTEIN.EINLEITUNG') ?></div>
+<?php foreach (wi_bausteinliste($wi_cfg, $wi_dps) as $wi_bs) {
+    wi_bausteinseite_zeigen($wi_bs);
+} ?>
+<div class="sm-small" style="margin-top:10px;"><?= wi_t('BAUSTEIN.ANSAGE') ?></div>
 
 <h2><?= wi_t('ARTEN.H') ?></h2>
 <div class="sm-small"><?= wi_t('ARTEN.HINT') ?></div>
