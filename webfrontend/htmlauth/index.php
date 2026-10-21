@@ -238,6 +238,23 @@ if ($wi_post && isset($_POST['download'])) {
     $wi_tab = 'tab-loxone';
     if (!$geraete) {
         $wi_error = wi_t('MELDUNG.KEIN_GERAET');
+    } elseif ($art === 'mqtt_bef') {
+        /* Gruppe 5 (3.1.12, Entwurf wo E12): eigener Virtueller Ausgang "WOLF ISM NG MQTT-Befehle" an den
+         * UDP-Eingang des Gateways aus der Tabelle der Befehlsbruecke (bb_vorlage()), nur die angehakten Geraete. */
+        $wi_bv = wi_befehle_vorlage($geraete);
+        if ($wi_bv === null) {
+            $wi_error = wi_t('BEFEHL.FEHLER_VORLAGE');
+        } elseif ($wi_bv[2] < 1) {
+            $wi_error = wi_t('MELDUNG.LEERE_VORLAGE');
+        } elseif (!wi_mqtt_udpinport()) {
+            $wi_error = wi_t('MELDUNG.KEIN_UDPIN_VORLAGE');
+        } else {
+            header('Content-Type: application/x-download');
+            header('Content-Disposition: attachment; filename="' . $wi_bv[0] . '"');
+            header('Content-Length: ' . strlen($wi_bv[1]));
+            echo $wi_bv[1];
+            exit;
+        }
     } else {
         list($name, $inhalt, $anzahl) = wi_vorlage($art, wi_config_read(), $geraete, $nurgesehen);
         if ($name === '') {
@@ -304,6 +321,12 @@ if ($wi_post && isset($_POST['laden'])) {
         } elseif (wi_config_write($neu)) {
             $wi_saved = true;
             $wi_hinweis = wi_t('MELDUNG.SICH_UEBERNOMMEN') . ' ' . wi_dienst_uebernehmen($neu, null);
+            // Gruppe 5 (3.1.12): Abo-Datei und Befehlsbruecke folgen der zurueckgespielten Einstellung.
+            wi_abo_datei(wi_cfg($neu, 'praefix', 'wolf_ng'), true);
+            $wi_bm = wi_bruecke_meldung(wi_bruecke_schalten(true));
+            if ($wi_bm !== '') {
+                $wi_hinweise[] = $wi_bm;
+            }
             /* Nr. 36 b (seit 3.1.8): die Sprachausgabe aus der Sicherung. Fehlt sie (Sicherung
              * vor 3.1.8), gelten ihre Vorgaben - wie fuer jeden anderen fehlenden Schluessel. Die
              * Sprechtoken traegt keine Sicherung: die geltenden bleiben. */
@@ -587,6 +610,12 @@ if ($wi_post && isset($_POST['save'])) {
     } elseif (wi_config_write($neu)) {
         $wi_saved = true;
         $wi_hinweis = wi_dienst_uebernehmen($neu, $wi_vorher);
+        /* Gruppe 5 (3.1.12, Entwurf wo 3.3): die Bruecke nimmt nur mit eingeschaltetem Server an, und ihre
+         * Tabelle haengt an der Firmware - beim Speichern starten, anhalten oder neu laden. */
+        $wi_bm = wi_bruecke_meldung(wi_bruecke_schalten(wi_cfg($wi_vorher, 'fw_version', '1.8') !== wi_cfg($neu, 'fw_version', '1.8')));
+        if ($wi_bm !== '') {
+            $wi_hinweise[] = $wi_bm;
+        }
     } else {
         $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e($wi_p['config']));
     }
@@ -606,6 +635,10 @@ if ($wi_post && isset($_POST['save_mqtt'])) {
     $wi_vorher = wi_config_read();
     $neu = $wi_vorher;
     $neu['mqtt'] = isset($_POST['mqtt']) ? '1' : '0';
+    // Gruppe 5 (3.1.12, E2/E6): Befehlsbruecke (zwei Haken) und alter Weg ueber die Zustandsthemen.
+    $neu['befehle_mqtt_ein'] = isset($_POST['befehle_mqtt_ein']) ? '1' : '0';
+    $neu['befehle_mqtt_steuern'] = isset($_POST['befehle_mqtt_steuern']) ? '1' : '0';
+    $neu['mqtt_zustand_schreiben'] = isset($_POST['mqtt_zustand_schreiben']) ? '1' : '0';
 
     $alt_pre = wi_cfg($neu, 'praefix', 'wolf_ng');
     // Kleinschreiben und Leerraum am Rand abschneiden bleiben still
@@ -627,7 +660,8 @@ if ($wi_post && isset($_POST['save_mqtt'])) {
 
     if ($wi_beanstandungen) {
         $wi_eingaben = array('formular' => 'mqtt',
-            'werte' => wi_eingaben_von(array('praefix'), array('mqtt')),
+            'werte' => wi_eingaben_von(array('praefix'), array('mqtt', 'befehle_mqtt_ein', 'befehle_mqtt_steuern',
+                                                               'mqtt_zustand_schreiben')),
             'falsch' => array('praefix'));
     } elseif (wi_config_write($neu)) {
         $wi_saved = true;
@@ -635,6 +669,13 @@ if ($wi_post && isset($_POST['save_mqtt'])) {
             wi_praefix_vormerken($alt_pre);
         }
         $wi_hinweis = trim($wechsel . ' ' . wi_dienst_uebernehmen($neu, $wi_vorher));
+        /* Gruppe 5 (3.1.12): Abo-Datei fuer Gateway V1 dem Praefix nachfuehren (E11); Bruecke direkt starten oder
+         * anhalten - bei einem Praefixwechsel neu, weil sie ihr Abo beim Start setzt. */
+        wi_abo_datei($neu['praefix'], true);
+        $wi_bm = wi_bruecke_meldung(wi_bruecke_schalten($wechsel !== ''));
+        if ($wi_bm !== '') {
+            $wi_hinweise[] = $wi_bm;
+        }
         if (wi_cfg($wi_vorher, 'mqtt', '1') === '1' && $neu['mqtt'] !== '1') {
             // Der Dienst trennt nach SIGHUP sauber; erst danach leeren, sonst
             // schriebe er "online" gleich wieder.
@@ -793,6 +834,8 @@ $wi_sicherung_mangel = wi_sicherung_maengel($wi_cfg);
 .sm-tbl th { background: #f0f0f0; }
 .sm-geraete { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 4px 14px; margin: 8px 0 4px; }
 .sm-geraete label { font-weight: 400; font-size: 0.9em; color: #333; margin: 2px 0; }
+/* Gruppe 5 (3.1.12): Kopierknopf der Namenstabelle (Bauart Waermepumpe 0.9.35). */
+.sm-wrap button.sm-kopie { font-size: 0.78em; padding: 1px 6px; margin-left: 4px; border: 1px solid #bbb; border-radius: 4px; background: #f5f5f5; color: #333; cursor: pointer; }
 
 /* --- Einheitliches Kachel-Raster im Reiter Test (Hausstandard) --- */
 .sm-h3 { color: #4f7d17; font-size: 1.0em; font-weight: 700; margin: 16px 0 2px; }
@@ -1100,6 +1143,14 @@ $wi_ans = wi_ansage_lesen(); ?>
 <label style="margin-top:12px;"><?= wi_t('MQTT.PRAEFIX') ?></label>
 <input data-role="none" type="text" name="praefix" value="<?= wi_e(wi_fw('mqtt', 'praefix', $wi_pre)) ?>" style="max-width:280px;"<?= wi_fm('praefix') ?>>
 <div class="sm-alert sm-warn"><?= wi_t('MQTT.PRAEFIX_HINT') ?></div>
+<?php /* Gruppe 5 (3.1.12, Entwurf wo 3.3): drei Haken, alle ab Werk aus (E2, E6). */ ?>
+<label class="sm-check" style="margin-top:12px;"><input data-role="none" type="checkbox" name="befehle_mqtt_ein" value="1"<?= wi_fh('mqtt', 'befehle_mqtt_ein', wi_cfg($wi_cfg, 'befehle_mqtt_ein', '0')) ? ' checked' : '' ?>> <?= wi_t('BEFEHL.HAKEN_EIN') ?></label>
+<div class="sm-small"><?= wi_t('BEFEHL.HAKEN_HILFE') ?></div>
+<?php if (wi_cfg($wi_cfg, 'mqtt', '1') !== '1' || wi_cfg($wi_cfg, 'enable', '0') !== '1') { ?><div class="sm-small"><?= wi_t('BEFEHL.HAKEN_MQTT_AUS') ?></div><?php } ?>
+<label class="sm-check" style="margin-top:8px;"><input data-role="none" type="checkbox" name="befehle_mqtt_steuern" value="1"<?= wi_fh('mqtt', 'befehle_mqtt_steuern', wi_cfg($wi_cfg, 'befehle_mqtt_steuern', '0')) ? ' checked' : '' ?>> <?= wi_t('BEFEHL.HAKEN_STEUERN') ?></label>
+<div class="sm-small"><?= wi_t('BEFEHL.HAKEN_STEUERN_HILFE') ?></div>
+<label class="sm-check" style="margin-top:8px;"><input data-role="none" type="checkbox" name="mqtt_zustand_schreiben" value="1"<?= wi_fh('mqtt', 'mqtt_zustand_schreiben', wi_cfg($wi_cfg, 'mqtt_zustand_schreiben', '0')) ? ' checked' : '' ?>> <?= wi_t('BEFEHL.HAKEN_ZUSTAND') ?></label>
+<div class="sm-small"><?= wi_t('BEFEHL.HAKEN_ZUSTAND_HILFE') ?></div>
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save_mqtt" value="1"><?= wi_t('MQTT.SPEICHERN') ?></button>
 </form>
 
@@ -1164,6 +1215,8 @@ $wi_gwf = ($wi_gw === null) ? 0 : (int) $wi_gw['fassung'];
 foreach (wi_mqtt_feste_themen() as $wi_ft => $wi_fa) { ?>
 <tr><td><span class="sm-mono"><?= wi_e($wi_pre) ?>/<?= wi_e($wi_ft) ?></span></td><td><?= wi_t($wi_fa[1]) ?></td><td><?= $wi_fa[0] ? wi_t('MQTT.RET_JA') : wi_t('MQTT.RET_NEIN') ?></td></tr>
 <?php } ?>
+<?php /* Gruppe 5 (3.1.12): das Lebenszeichen der Befehlsbruecke (sendet nicht der Dienst). */ ?>
+<tr><td><span class="sm-mono"><?= wi_e($wi_pre) ?>/status/befehle</span></td><td><?= wi_t('MQTT.B_ST_BEFEHLE') ?></td><td><?= wi_t('MQTT.RET_NEIN') ?></td></tr>
 <?php
 $wi_zeit_typen = array('DPT_TimeOfDay', 'DPT_Date');
 $wi_gezeigt = 0;
@@ -1381,6 +1434,37 @@ $wi_sgm = wi_sg_merker();
 <div class="sm-pane<?php echo $wi_tab === 'tab-loxone' ? ' sm-active' : ''; ?>" id="tab-loxone">
 
 <h2><?= wi_t('LOXONE.H_WEG') ?></h2>
+<?php
+/* Gruppe 5 / MQTT (3.1.12, Entwurf wo 2.5): Schritte nach der Hausform (Einspeisebremse, Waermepumpe) - Werte in
+ * einfache Virtuelle Eingaenge (Namenstabelle), Hakenliste fuer Gateway V2, Befehle ueber die Befehlsbruecke. Die
+ * alten Vorlagen stehen zugeklappt unter "Bestehende Anlagen". Die Satzwahl haengt an der Gateway-Fassung; ist sie
+ * nicht lesbar, stehen BEIDE Saetze da. */
+$wi_gwf = ($wi_gw === null) ? 0 : (int) $wi_gw['fassung'];
+$wi_namen = wi_mqtt_namen($wi_cfg);
+$wi_nhaken = array();
+$wi_nweitere = array();
+$wi_nfehlt = array();
+foreach ($wi_namen as $wi_nz) {
+    if ($wi_nz['fehlt']) {
+        $wi_nfehlt[] = $wi_nz['bedeutung'];
+    } elseif ($wi_nz['haken']) {
+        $wi_nhaken[] = $wi_nz;
+    } else {
+        $wi_nweitere[] = $wi_nz;
+    }
+}
+$wi_bliste = wi_befehle_liste();
+$wi_ntabelle = function ($zeilen) { ?>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= wi_t('LOXONE.TH_NAME') ?></th><th><?= wi_t('LOXONE.TH_BEDEUTUNG') ?></th><th><?= wi_t('LOXONE.TH_BEREICH') ?></th><th><?= wi_t('LOXONE.TH_ART') ?></th><th><?= wi_t('MQTT.TH_RETAIN') ?></th><th><?= wi_t('LOXONE.TH_MUSTER') ?></th></tr>
+<?php foreach ($zeilen as $wi_nz) { ?>
+<tr><td><span class="sm-mono"><?= wi_e($wi_nz['name']) ?></span> <button data-role="none" type="button" class="sm-kopie" data-kopie="<?= wi_e($wi_nz['name']) ?>"><?= wi_t('LOXONE.KOPIEREN') ?></button></td><td><?= wi_e($wi_nz['bedeutung']) ?></td><td><?= wi_e($wi_nz['bereich']) ?></td><td><?= $wi_nz['text'] ? wi_t('LOXONE.ART_TEXT') : wi_t('LOXONE.ART_ZAHL') ?></td><td><?= $wi_nz['retained'] ? wi_t('MQTT.RET_JA') : wi_t('MQTT.RET_NEIN') ?></td><td><?= $wi_nz['muster'] ? wi_t('MQTT.JA') : wi_t('MQTT.NEIN') ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<?php };
+?>
 
 <div class="sm-step"><?= sprintf(wi_t('LOXONE.S1'),
     '<span class="sm-mono">' . wi_e($wi_ip) . '</span>',
@@ -1388,22 +1472,71 @@ $wi_sgm = wi_sg_merker();
 
 <div class="sm-step"><?= wi_t('LOXONE.S2') ?></div>
 
-<div class="sm-step"><?= sprintf(wi_t('LOXONE.S3'), (int) count($wi_dps)) ?></div>
+<div class="sm-step"><?= sprintf(wi_t('LOXONE.S3'), '<span class="sm-mono">' . wi_e($wi_pre) . '/#</span>') ?>
+<?php if ($wi_gwf < 2) { ?>
+<div class="sm-small"><?= sprintf(wi_t('LOXONE.S3_V1'), '<span class="sm-mono">' . wi_e($wi_pre) . '/#</span>') ?></div>
+<?php } ?>
+<?php if ($wi_gwf !== 1) { ?>
+<div class="sm-small"><?= sprintf(wi_t('LOXONE.S3_V2'), '<span class="sm-mono">' . wi_e($wi_pre) . '</span>') ?></div>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th style="width:32px;">#</th><th><?= wi_t('LOXONE.TH_THEMA') ?></th><th><?= wi_t('LOXONE.TH_NAME') ?></th><th><?= wi_t('LOXONE.TH_MUSTER') ?></th></tr>
+<?php foreach ($wi_nhaken as $wi_i => $wi_nz) { ?>
+<tr><td><?= (int) $wi_i + 1 ?></td><td><span class="sm-mono"><?= wi_e($wi_nz['thema']) ?></span></td><td><span class="sm-mono"><?= wi_e($wi_nz['name']) ?></span></td><td><?= $wi_nz['muster'] ? wi_t('MQTT.JA') : wi_t('MQTT.NEIN') ?></td></tr>
+<?php } ?>
+</table>
+</div>
+<div class="sm-small"><?= wi_t('LOXONE.S3_NONCACHED') ?> <?= wi_t('LOXONE.S3_WEITERE') ?></div>
+<?php } ?>
+<?php if ($wi_gwf === 0) { ?><div class="sm-small"><?= wi_t('MQTT.ABO_UNKLAR') ?></div><?php } ?>
+<div class="sm-small"><?= wi_t('LOXONE.S3_RECONNECT') ?></div>
+</div>
 
-<div class="sm-step"><?= wi_t('LOXONE.S4') ?></div>
+<div class="sm-step"><?= wi_t('LOXONE.S4') ?>
+<h3 class="sm-h3"><?= wi_t('LOXONE.H_NAMEN') ?></h3>
+<div class="sm-small"><?= sprintf(wi_t('LOXONE.NAMEN_TEXT'), '<span class="sm-mono">' . wi_e($wi_pre) . '</span>', wi_e($wi_fw),
+    '<span class="sm-mono">' . wi_e(wi_mqtt_gateway_name($wi_pre . '/status/ok')) . '</span>') ?></div>
+<div class="sm-small"><?= wi_t('LOXONE.NAMEN_HINWEISE') ?></div>
+<?php if ($wi_nfehlt) { ?>
+<div class="sm-warnung"><?= sprintf(wi_t('LOXONE.FEHLT_FW'), wi_e($wi_fw), wi_e(implode(', ', $wi_nfehlt))) ?></div>
+<?php } ?>
+<?php $wi_ntabelle($wi_nhaken); ?>
+<details><summary><?= sprintf(wi_t('LOXONE.WEITERE'), count($wi_nweitere)) ?></summary>
+<?php $wi_ntabelle($wi_nweitere); ?>
+</details>
+<div class="sm-small"><?= wi_t('BAUSTEIN.SEITE1_H6') ?></div>
+</div>
 
-<div class="sm-step"><?= sprintf(wi_t('LOXONE.S5'),
-    '<span class="sm-mono">tcp://' . wi_e($wi_ip) . ':' . wi_e(wi_cfg($wi_cfg, 'input_port', '12005')) . '</span>') ?></div>
+<div class="sm-step"><?= sprintf(wi_t('LOXONE.S5'), wi_e($wi_pre)) ?>
+<div class="sm-alert sm-err"><?= wi_t('BAUSTEIN.SEITE3_H1') ?></div>
+<div class="sm-small"><?= sprintf(wi_t('LOXONE.BEF_TEXT'), '<span class="sm-mono">' . wi_e($wi_pre) . '/befehl/&hellip;</span>') ?></div>
+<div class="sm-small"><?= wi_t('LOXONE.BEF_SICHER') ?></div>
+<?php if ($wi_bliste === null) { ?>
+<div class="sm-warnung"><?= wi_t('LOXONE.BEF_KEINE') ?></div>
+<?php } else { ?>
+<details><summary><?= sprintf(wi_t('LOXONE.BEF_ALLE'), count($wi_bliste['befehle'])) ?></summary>
+<div class="sm-breit">
+<table class="sm-tbl">
+<tr><th><?= wi_e(wi_t('BEFEHL.T_TITEL')) ?></th><th><?= wi_e(wi_t('BEFEHL.T_THEMA')) ?></th><th><?= wi_e(wi_t('BEFEHL.T_BEREICH')) ?></th><th><?= wi_e(wi_t('BEFEHL.T_LOXONE')) ?></th></tr>
+<?php foreach ($wi_bliste['befehle'] as $wi_bb) {
+    $wi_bw = isset($wi_bb['min']) ? $wi_bb['min'] . " \xe2\x80\xa6 " . $wi_bb['max'] : '0 | 1';
+    $wi_bl = array_values(array_filter(array($wi_bb['loxone']['ein'], $wi_bb['loxone']['aus']), 'strlen')); ?>
+<tr><td><?= wi_e($wi_bb['titel']) ?></td><td><span class="sm-mono"><?= wi_e($wi_bb['thema']) ?></span></td><td><?= wi_e($wi_bw) ?></td><td><span class="sm-mono"><?= implode('<br>', array_map('wi_e', $wi_bl)) ?></span></td></tr>
+<?php } ?>
+</table>
+</div>
+</details>
+<?php } ?>
+<div class="sm-small"><?= wi_e(wi_t('BEFEHL.T_QUITTUNG')) ?>: <span class="sm-mono"><?= wi_e($wi_pre) ?>/befehl/&hellip;/quittung</span> &ndash; <?= wi_e(wi_t('BEFEHL.Q_AUSGEFUEHRT')) ?></div>
+</div>
 
 <div class="sm-step"><?= sprintf(wi_t('LOXONE.S6'),
-    '<span class="sm-mono">' . wi_e($wi_pre) . '/zaehler</span>',
-    '<span class="sm-mono">' . wi_e($wi_pre) . '/online</span>') ?></div>
+    '<span class="sm-mono">' . wi_e(wi_mqtt_gateway_name($wi_pre . '/status/zaehler')) . '</span>',
+    '<span class="sm-mono">' . wi_e(wi_mqtt_gateway_name($wi_pre . '/status/ok')) . '</span>') ?></div>
 
 <div class="sm-step"><?= wi_t('LOXONE.S7') ?></div>
 
-<div class="sm-step"><?= sprintf(wi_t('LOXONE.S8'), '<span class="sm-mono">' . wi_e($wi_pre) . '/#</span>') ?></div>
-
-<div class="sm-alert sm-warn"><?= wi_t('LOXONE.DOPPELT') ?></div>
+<div class="sm-step"><?= sprintf(wi_t('LOXONE.S8'), '<span class="sm-mono">' . wi_e(wi_mqtt_gateway_name($wi_pre . '/status/zaehler')) . '</span>') ?></div>
 
 <h2><?= wi_t('LOXONE.H_GERAETE') ?></h2>
 <div class="sm-small"><?= sprintf(wi_t('LOXONE.TABELLE'), wi_e($wi_fw), count($wi_dps), $wi_anz_out, $wi_anz_in) ?></div>
@@ -1420,14 +1553,24 @@ $wi_sgm = wi_sg_merker();
 </div>
 <div class="sm-small"><?= wi_t('LOXONE.OHNE_AUSWAHL') ?></div>
 
-<label class="sm-check" style="margin-top:10px;"><input data-role="none" type="checkbox" name="nurgesehen" value="1"<?= $wi_gesehen ? '' : ' disabled' ?>> <?= wi_t('LOXONE.NURGESEHEN') ?></label>
-<div class="sm-small"><?= $wi_gesehen ? sprintf(wi_t('LOXONE.NURGESEHEN_HINT'), count($wi_gesehen)) : wi_t('LOXONE.NURGESEHEN_LEER') ?></div>
-
 <div class="sm-legende">
 <span><i class="sm-punkt sm-b-technik"></i> <?= wi_t('LEGENDE.TECHNIK') ?></span>
 </div>
 
+<div class="sm-knopfreihe">
+<button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="mqtt_bef"><?= wi_t('LOXONE.V_MQTT_BEF') ?></button>
+</div>
+<div class="sm-small"><?= wi_t('LOXONE.V_MQTT_BEF_HINT') ?></div>
+
+<details style="margin-top:14px;"><summary><b><?= wi_t('LOXONE.H_BESTEHEND') ?></b></summary>
+<div class="sm-small"><?= wi_t('LOXONE.BESTEHEND_TEXT') ?></div>
+<div class="sm-alert sm-warn"><?= wi_t('LOXONE.DOPPELT') ?></div>
+<label class="sm-check" style="margin-top:10px;"><input data-role="none" type="checkbox" name="nurgesehen" value="1"<?= $wi_gesehen ? '' : ' disabled' ?>> <?= wi_t('LOXONE.NURGESEHEN') ?></label>
+<div class="sm-small"><?= $wi_gesehen ? sprintf(wi_t('LOXONE.NURGESEHEN_HINT'), count($wi_gesehen)) : wi_t('LOXONE.NURGESEHEN_LEER') ?></div>
+
 <h3 class="sm-h3"><?= wi_t('LOXONE.H_MQTT_VORLAGEN') ?></h3>
+<div class="sm-small"><?= sprintf(wi_t('LOXONE.S3_ALT'), (int) count($wi_dps)) ?></div>
+<div class="sm-small"><?= wi_t('LOXONE.S4_ALT') ?></div>
 <div class="sm-knopfreihe">
 <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="mqtt_in"><?= wi_t('LOXONE.V_MQTT_IN') ?></button>
 <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="mqtt_out"><?= wi_t('LOXONE.V_MQTT_OUT') ?></button>
@@ -1435,12 +1578,33 @@ $wi_sgm = wi_sg_merker();
 <div class="sm-small"><?= wi_t('LOXONE.V_MQTT_HINT') ?></div>
 
 <h3 class="sm-h3"><?= wi_t('LOXONE.H_UDP_VORLAGEN') ?></h3>
+<div class="sm-small"><?= sprintf(wi_t('LOXONE.TCP_BEFEHLE'),
+    '<span class="sm-mono">tcp://' . wi_e($wi_ip) . ':' . wi_e(wi_cfg($wi_cfg, 'input_port', '12005')) . '</span>') ?></div>
 <div class="sm-knopfreihe">
 <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="udp_in"><?= wi_t('LOXONE.V_UDP_IN') ?></button>
 <button data-role="none" class="sm-btn sm-b-technik" type="submit" name="download" value="tcp_out"><?= wi_t('LOXONE.V_TCP_OUT') ?></button>
 </div>
 <div class="sm-small"><?= wi_t('LOXONE.V_UDP_HINT') ?></div>
+</details>
 </form>
+<script>
+(function () {
+    document.querySelectorAll('.sm-kopie').forEach(function (k) {
+        k.addEventListener('click', function () {
+            var n = k.getAttribute('data-kopie');
+            var fertig = function () { k.textContent = <?= json_encode(wi_t('LOXONE.KOPIERT')) ?>; };
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(n).then(fertig);
+            } else {
+                var f = document.createElement('textarea');
+                f.value = n; document.body.appendChild(f); f.select();
+                try { document.execCommand('copy'); fertig(); } catch (e) {}
+                document.body.removeChild(f);
+            }
+        });
+    });
+})();
+</script>
 
 <?php
 /**
@@ -1461,51 +1625,44 @@ $wi_sgm = wi_sg_merker();
  * (wi_sg_punkte(); ab Werk "direkt"), bei Befehlen mit "_setzen". Fehlt der Datenpunkt in der Firmware, steht
  * BAUSTEIN.NAME_FEHLT da. Mit Firmware 1.8, Praefix wolf_ng und Kreis direkt steht genau der Name der Liste da.
  *
+ * Gruppe 5 / MQTT (3.1.12): die Eingaenge sind einfache Virtuelle Eingaenge (Namen aus wi_muster_eingaenge() in
+ * wi_lib.php - dieselbe Quelle wie Namenstabelle und Hakenliste; status/zaehler und status/ok statt zaehler und
+ * online), die vier Befehle gehen ueber die Befehlsbruecke (Thema aus wi_bb_name() in der Parameterzelle).
+ *
  * Rueckgabe: Liste von array('seite', 'bild', 'zeilen' => array(array(Nr, Typ, Name, Parameter, Eingaenge),
  * ...), 'schritte', 'hinweise'). Zellen und Schritte sind Klartext (unten maskiert), die Hinweise
  * freigegebenes HTML aus der Sprachdatei.
  */
 function wi_bausteinliste($cfg, $dps)
 {
-    $kx = array('pre' => wi_cfg($cfg, 'praefix', 'wolf_ng'), 'fw' => wi_cfg($cfg, 'fw_version', '1.8'),
-                'dp' => array(), 'kr' => array());
-    foreach ($dps as $d) {
-        $kx['dp'][(int) $d['id']] = $d;
-    }
-    $kreise = wi_sg_kreise();
-    $kreis = wi_cfg($cfg, 'sg_kreis', 'direkt');
-    if (!isset($kreise[$kreis])) {
-        $kreis = 'direkt';
-    }
-    foreach (wi_sg_punkte($cfg, $kreis) as $k => $p) {
-        $kx['kr'][$k] = (int) $p['id'];
-    }
-    foreach ($dps as $d) {   // die Raumtemperatur des Kreises ist nur lesbar, wi_sg_punkte() kennt sie nicht
-        if ($d['geraet'] === $kreise[$kreis] && $d['name'] === 'Raumtemperatur') {
-            $kx['kr']['raum'] = (int) $d['id'];
-        }
-    }
+    /* Gruppe 5 / MQTT (3.1.12): die Namen der Eingaenge kommen aus wi_muster_eingaenge() (wi_lib.php - dieselbe Quelle
+     * wie Namenstabelle und Hakenliste), die Themen der vier Befehle aus wi_bb_name() des Kreises. Die Zellen sind
+     * deutsch wortgleich mit Musterprojekt/baustein_listen.txt (Stand 21.10.2026); die Befehle tragen einen festen
+     * Titel "WOLF ISM NG: ..." und das Thema in der Parameterzelle. */
+    $kx = wi_baustein_kx($cfg, $dps);
+    $ein = wi_muster_eingaenge();
+    $bef = wi_muster_befehle();
     // Seitenname (= Config-Seite im Musterprojekt, deshalb fest), Bild, Zeilen, Kasten, Hinweise
     $seiten = array(
         array('WOLF ISM NG', 'einbindung_loxone.png', array(
-            array(wi_t('BAUSTEIN.Z1_01'), array('pre', 'zaehler')),
-            array(wi_t('BAUSTEIN.Z1_02'), array('pre', 'online')),
-            array(wi_t('BAUSTEIN.Z1_03')),
-            array(wi_t('BAUSTEIN.Z1_04')),
-            array(wi_t('BAUSTEIN.Z1_05')),
-            array(wi_t('BAUSTEIN.Z1_06')),
-            array(wi_t('BAUSTEIN.Z1_07')),
-            array(wi_t('BAUSTEIN.Z1_08')),
-            array(wi_t('BAUSTEIN.Z1_09')),
-            array(wi_t('BAUSTEIN.Z1_10'), array('dp', 1)),
-            array(wi_t('BAUSTEIN.Z1_11'), array('dp', 53)),
-            array(wi_t('BAUSTEIN.Z1_12'), array('dp', 372)),
-            array(wi_t('BAUSTEIN.Z1_13')),
-            array(wi_t('BAUSTEIN.Z1_14')),
-            array(wi_t('BAUSTEIN.Z1_15')),
-            array(wi_t('BAUSTEIN.Z1_16')),
-            array(wi_t('BAUSTEIN.Z1_17'), array('dp', 2)),
-            array(wi_t('BAUSTEIN.Z1_18')),
+            wi_t('BAUSTEIN.Z1_01'),
+            wi_t('BAUSTEIN.Z1_02'),
+            wi_t('BAUSTEIN.Z1_03'),
+            wi_t('BAUSTEIN.Z1_04'),
+            wi_t('BAUSTEIN.Z1_05'),
+            wi_t('BAUSTEIN.Z1_06'),
+            wi_t('BAUSTEIN.Z1_07'),
+            wi_t('BAUSTEIN.Z1_08'),
+            wi_t('BAUSTEIN.Z1_09'),
+            wi_t('BAUSTEIN.Z1_10'),
+            wi_t('BAUSTEIN.Z1_11'),
+            wi_t('BAUSTEIN.Z1_12'),
+            wi_t('BAUSTEIN.Z1_13'),
+            wi_t('BAUSTEIN.Z1_14'),
+            wi_t('BAUSTEIN.Z1_15'),
+            wi_t('BAUSTEIN.Z1_16'),
+            wi_t('BAUSTEIN.Z1_17'),
+            wi_t('BAUSTEIN.Z1_18'),
         ), array(
             'BAUSTEIN.SEITE1_SCHRITT1',
             'BAUSTEIN.SEITE1_SCHRITT2',
@@ -1523,31 +1680,31 @@ function wi_bausteinliste($cfg, $dps)
             'BAUSTEIN.SEITE1_H7',
         )),
         array('WOLF ISM NG Werte', 'einbindung_loxone_werte.png', array(
-            array(wi_t('BAUSTEIN.Z2_01'), array('dp', 4)),
-            array(wi_t('BAUSTEIN.Z2_02'), array('dp', 364)),
-            array(wi_t('BAUSTEIN.Z2_03'), array('dp', 6)),
-            array(wi_t('BAUSTEIN.Z2_04')),
-            array(wi_t('BAUSTEIN.Z2_05'), array('dp', 8)),
-            array(wi_t('BAUSTEIN.Z2_06'), array('kr', 'raum', '')),
-            array(sprintf(wi_t('BAUSTEIN.Z2_07')), array('dp', 3)),
-            array(wi_t('BAUSTEIN.Z2_08'), array('dp', 9)),
-            array(wi_t('BAUSTEIN.Z2_09'), array('dp', 10)),
-            array(wi_t('BAUSTEIN.Z2_10')),
-            array(wi_t('BAUSTEIN.Z2_11'), array('dp', 197)),
-            array(sprintf(wi_t('BAUSTEIN.Z2_12'))),
-            array(wi_t('BAUSTEIN.Z2_13'), array('dp', 7)),
-            array(wi_t('BAUSTEIN.Z2_14'), array('kr', 'ww_soll', '')),
-            array(wi_t('BAUSTEIN.Z2_15'), array('dp', 11)),
-            array(wi_t('BAUSTEIN.Z2_16'), array('kr', 'ww_modus', '')),
-            array(wi_t('BAUSTEIN.Z2_17')),
-            array(wi_t('BAUSTEIN.Z2_18'), array('dp', 13)),
-            array(wi_t('BAUSTEIN.Z2_19')),
-            array(wi_t('BAUSTEIN.Z2_20')),
-            array(wi_t('BAUSTEIN.Z2_21')),
-            array(wi_t('BAUSTEIN.Z2_22')),
-            array(wi_t('BAUSTEIN.Z2_23')),
-            array(wi_t('BAUSTEIN.Z2_24')),
-            array(wi_t('BAUSTEIN.Z2_25')),
+            wi_t('BAUSTEIN.Z2_01'),
+            wi_t('BAUSTEIN.Z2_02'),
+            wi_t('BAUSTEIN.Z2_03'),
+            wi_t('BAUSTEIN.Z2_04'),
+            wi_t('BAUSTEIN.Z2_05'),
+            wi_t('BAUSTEIN.Z2_06'),
+            sprintf(wi_t('BAUSTEIN.Z2_07')),
+            wi_t('BAUSTEIN.Z2_08'),
+            wi_t('BAUSTEIN.Z2_09'),
+            wi_t('BAUSTEIN.Z2_10'),
+            wi_t('BAUSTEIN.Z2_11'),
+            sprintf(wi_t('BAUSTEIN.Z2_12')),
+            wi_t('BAUSTEIN.Z2_13'),
+            wi_t('BAUSTEIN.Z2_14'),
+            wi_t('BAUSTEIN.Z2_15'),
+            wi_t('BAUSTEIN.Z2_16'),
+            wi_t('BAUSTEIN.Z2_17'),
+            wi_t('BAUSTEIN.Z2_18'),
+            wi_t('BAUSTEIN.Z2_19'),
+            wi_t('BAUSTEIN.Z2_20'),
+            wi_t('BAUSTEIN.Z2_21'),
+            wi_t('BAUSTEIN.Z2_22'),
+            wi_t('BAUSTEIN.Z2_23'),
+            wi_t('BAUSTEIN.Z2_24'),
+            wi_t('BAUSTEIN.Z2_25'),
         ), array(
             'BAUSTEIN.SEITE2_SCHRITT1',
             'BAUSTEIN.SEITE2_SCHRITT2',
@@ -1562,25 +1719,25 @@ function wi_bausteinliste($cfg, $dps)
             'BAUSTEIN.SEITE2_H5',
         )),
         array('WOLF ISM NG Bedienung', 'einbindung_loxone_bedienung.png', array(
-            array(wi_t('BAUSTEIN.Z3_01')),
-            array(wi_t('BAUSTEIN.Z3_02')),
-            array(wi_t('BAUSTEIN.Z3_03'), array('kr', 'hk_modus', '_setzen')),
-            array(wi_t('BAUSTEIN.Z3_04')),
-            array(wi_t('BAUSTEIN.Z3_05')),
-            array(wi_t('BAUSTEIN.Z3_06'), array('kr', 'ww_modus', '_setzen')),
-            array(wi_t('BAUSTEIN.Z3_07')),
-            array(wi_t('BAUSTEIN.Z3_08'), array('kr', 'ww_soll', '_setzen')),
-            array(wi_t('BAUSTEIN.Z3_09')),
-            array(wi_t('BAUSTEIN.Z3_10'), array('kr', 'korrektur', '_setzen')),
-            array(wi_t('BAUSTEIN.Z3_11'), array('kr', 'hk_modus', '')),
-            array(wi_t('BAUSTEIN.Z3_12'), array('kr', 'korrektur', '')),
-            array(wi_t('BAUSTEIN.Z3_13')),
-            array(wi_t('BAUSTEIN.Z3_14'), array('pre', 'sg_laden')),
-            array(wi_t('BAUSTEIN.Z3_15'), array('pre', 'sg_dimmen')),
-            array(wi_t('BAUSTEIN.Z3_16'), array('pre', 'sg_fenster')),
-            array(wi_t('BAUSTEIN.Z3_17'), array('pre', 'sg_naechster_preis')),
-            array(wi_t('BAUSTEIN.Z3_18'), array('pre', 'sg_lage')),
-            array(wi_t('BAUSTEIN.Z3_19')),
+            wi_t('BAUSTEIN.Z3_01'),
+            wi_t('BAUSTEIN.Z3_02'),
+            wi_t('BAUSTEIN.Z3_03'),
+            wi_t('BAUSTEIN.Z3_04'),
+            wi_t('BAUSTEIN.Z3_05'),
+            wi_t('BAUSTEIN.Z3_06'),
+            wi_t('BAUSTEIN.Z3_07'),
+            wi_t('BAUSTEIN.Z3_08'),
+            wi_t('BAUSTEIN.Z3_09'),
+            wi_t('BAUSTEIN.Z3_10'),
+            wi_t('BAUSTEIN.Z3_11'),
+            wi_t('BAUSTEIN.Z3_12'),
+            wi_t('BAUSTEIN.Z3_13'),
+            wi_t('BAUSTEIN.Z3_14'),
+            wi_t('BAUSTEIN.Z3_15'),
+            wi_t('BAUSTEIN.Z3_16'),
+            wi_t('BAUSTEIN.Z3_17'),
+            wi_t('BAUSTEIN.Z3_18'),
+            wi_t('BAUSTEIN.Z3_19'),
         ), array(
             'BAUSTEIN.SEITE3_SCHRITT1',
             'BAUSTEIN.SEITE3_SCHRITT2',
@@ -1598,14 +1755,18 @@ function wi_bausteinliste($cfg, $dps)
         )),
     );
     $aus = array();
-    foreach ($seiten as $wi_s) {
+    foreach ($seiten as $wi_si => $wi_s) {
         $wi_zeilen = array();
         foreach ($wi_s[2] as $wi_i => $wi_z) {
-            $wi_c = array_pad(explode(' | ', $wi_z[0], 4), 4, '');
-            if (isset($wi_z[1])) {
-                $wi_c[1] = wi_baustein_name($wi_z[1], $kx);
+            $wi_nr = $wi_i + 1;
+            $wi_c = array_pad(explode(' | ', $wi_z, 4), 4, '');
+            if (isset($ein[$wi_si + 1][$wi_nr])) {
+                $wi_c[1] = wi_baustein_name($ein[$wi_si + 1][$wi_nr], $kx);
             }
-            $wi_zeilen[] = array_merge(array($wi_i + 1), $wi_c);
+            if ($wi_si === 2 && isset($bef[$wi_nr])) {
+                $wi_c[2] = wi_baustein_befehl($wi_c[2], $bef[$wi_nr], $kx);
+            }
+            $wi_zeilen[] = array_merge(array($wi_nr), $wi_c);
         }
         $aus[] = array('seite' => $wi_s[0], 'bild' => $wi_s[1], 'zeilen' => $wi_zeilen,
                        'schritte' => array_map('wi_t', $wi_s[3]), 'hinweise' => array_map('wi_t', $wi_s[4]));
@@ -1613,17 +1774,19 @@ function wi_bausteinliste($cfg, $dps)
     return $aus;
 }
 
-/** Name einer Listenzeile mit eigenem Praefix, eigener Firmware und eigenem Heizkreis (siehe oben). */
-function wi_baustein_name($art, $kx)
+/** Gruppe 5 (3.1.12): das Thema eines Befehls der Seite "WOLF ISM NG Bedienung" in der Parameterzelle. Die Liste nennt
+ *  es fuer Praefix wolf_ng, Firmware 1.8 und Kreis "direkt"; hier steht es fuer die eigene Einstellung, und fehlt der
+ *  Datenpunkt in der Firmware, steht BAUSTEIN.NAME_FEHLT an seiner Stelle. */
+function wi_baustein_befehl($zelle, $punkt, $kx)
 {
-    if ($art[0] === 'pre') {
-        return $kx['pre'] . '_' . $art[1];
-    }
-    $id = $art[0] === 'dp' ? (int) $art[1] : (isset($kx['kr'][$art[1]]) ? $kx['kr'][$art[1]] : 0);
-    if (!isset($kx['dp'][$id])) {
-        return sprintf(wi_t('BAUSTEIN.NAME_FEHLT'), $kx['fw']);
-    }
-    return str_replace('/', '_', wi_topic_pre($kx['pre'], $kx['dp'][$id])) . ($art[0] === 'kr' ? $art[2] : '');
+    $vorgabe = array('hk_modus' => 'direkter/heizkreis/programmwahl/heizkreis',
+                     'ww_modus' => 'direkter/heizkreis/programmwahl/warmwasser',
+                     'ww_soll' => 'direkter/heizkreis/warmwassersolltemperatur',
+                     'korrektur' => 'direkter/heizkreis/sollwertkorrektur');
+    $alt = 'wolf_ng/befehl/' . $vorgabe[$punkt];
+    $d = wi_baustein_dp(array('kr', $punkt), $kx);
+    $neu = $d === null ? sprintf(wi_t('BAUSTEIN.NAME_FEHLT'), $kx['fw']) : $kx['pre'] . '/befehl/' . wi_bb_name($d);
+    return str_replace($alt, $neu, $zelle);
 }
 
 /** Eine Seite: Ueberschrift (= Seitenname in Config), Kasten, Tabelle, Hinweise, Bild, Link. */

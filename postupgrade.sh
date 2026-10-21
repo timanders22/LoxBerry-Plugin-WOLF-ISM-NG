@@ -84,6 +84,25 @@ if [ "$WI_ZURUECK" = "1" ]; then
     esac
 fi
 
+# Gruppe 5 / MQTT (3.1.12, Entwurf wo E2, Hausherr 21.10.2026): eine Konfiguration aus 3.1.11 kennt die drei neuen
+# Schluessel nicht. Der alte Schreibweg (publish auf das Zustandsthema) wirkte dort ohne Haken - er gilt weiter
+# (mqtt_zustand_schreiben 1), damit bestehende Anlagen mit der alten Ausgangsvorlage weiter schalten. Die beiden
+# Haken der Befehlsbruecke kommen ab Werk aus dazu. Nur angehaengt, was fehlt; VOR dem Neustart des Dienstes,
+# der den Schluessel liest.
+WI_CONF="$PCONFIG/wolf_ism8i.conf"
+if [ -f "$WI_CONF" ]; then
+    for WI_KV in "mqtt_zustand_schreiben 1" "befehle_mqtt_ein 0" "befehle_mqtt_steuern 0"; do
+        WI_K=${WI_KV%% *}
+        if ! grep -Eq "^[[:space:]]*$WI_K[[:space:]]" "$WI_CONF"; then
+            if printf '%s\n' "$WI_KV" >> "$WI_CONF" 2>/dev/null; then
+                echo "<INFO> Konfiguration ergaenzt: $WI_KV"
+            else
+                echo "<WARNING> Konfiguration nicht ergaenzt ($WI_KV) - es gilt die Vorgabe."
+            fi
+        fi
+    done
+fi
+
 # Die Marke aus preupgrade.sh. Dieses Skript ist das LETZTE Hakenskript
 # dieser Linie: preroot, preupgrade, postinstall, postupgrade - ein
 # postroot.sh gibt es hier nicht.
@@ -120,6 +139,21 @@ fi
 # Entfernt wird immer, auch wenn der Start unterblieb: sonst sperrte die
 # Marke den Waechter eine Stunde lang.
 rm -f "$WI_MARKE"
+
+# ---------- Befehlsbruecke (Gruppe 5 / MQTT, 3.1.12) ----------
+# Erst nach der Marke (sonst startet befehlsbruecke.sh nicht - "Aktualisierung im Gang"); sie startet nur mit dem
+# Haken "Befehle ueber MQTT annehmen" bei eingeschaltetem Server. Rueckgabe nicht ausgewertet: der Minutentakt
+# versucht es erneut.
+BBSH="$PBIN/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    BB_AUS=$(timeout 40 bash "$BBSH" start 2>&1 | head -n 1)
+    case "$BB_AUS" in
+        *gestartet*|*laeuft*) echo "<OK> Befehlsbruecke: $BB_AUS" ;;
+        "Haken aus - kein Start.") echo "<INFO> Befehlsbruecke: aus (Reiter MQTT, Haken 'Befehle ueber MQTT annehmen')." ;;
+        Aktualisierung*) echo "<INFO> Befehlsbruecke: $BB_AUS" ;;
+        *) echo "<WARNING> Befehlsbruecke: $BB_AUS - der Minutentakt versucht es erneut." ;;
+    esac
+fi
 
 # Exit with Status 0
 exit 0

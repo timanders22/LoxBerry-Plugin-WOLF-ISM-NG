@@ -126,6 +126,21 @@ fi
 # der Deinstallation einer Fassung bis 3.0.10. Die .alt liest nichts mehr;
 # uninstall raeumt sie ab.
 # ---------------------------------------------------------------------------
+# ---------- Befehlsbruecke (Gruppe 5 / MQTT, 3.1.12) ----------
+# Vor dem Ausstieg der Neuinstallation (unten): bei einer Neuinstallation startet sie nur mit dem Haken "Befehle
+# ueber MQTT annehmen" (ab Werk aus) - also nicht; bei einer Aktualisierung liegt die Marke noch, dann startet sie
+# postupgrade.sh, nachdem die Marke gefallen ist.
+BBSH="$NETZ_BASE/bin/plugins/$NETZ_PDIR/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    BB_AUS=$(timeout 40 bash "$BBSH" start 2>&1 | head -n 1)
+    case "$BB_AUS" in
+        *gestartet*|*laeuft*) echo "<OK> Befehlsbruecke: $BB_AUS" ;;
+        "Haken aus - kein Start.") echo "<INFO> Befehlsbruecke: aus (Reiter MQTT, Haken 'Befehle ueber MQTT annehmen')." ;;
+        Aktualisierung*) echo "<INFO> Befehlsbruecke: $BB_AUS" ;;
+        *) echo "<WARNING> Befehlsbruecke: $BB_AUS - der Minutentakt versucht es erneut." ;;
+    esac
+fi
+
 WI_MARKE="$NETZ_BASE/data/plugins/$NETZ_PDIR.upgrade_laeuft"
 if [ ! -f "$WI_MARKE" ]; then
     WI_ALT=""

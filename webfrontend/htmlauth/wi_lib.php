@@ -407,6 +407,17 @@ function wi_defaults()
         'sg_14a'           => '0',
         'sg_14a_modus'     => 'spar',
         'sg_14a_alter'     => '900',
+
+        /* --- Gruppe 5 / MQTT (3.1.12, Entwurf wo E2/E6, Hausherr 21.10.2026) --------------------
+         *
+         * Befehlsbruecke: annehmen (befehle_mqtt_ein) und an die Heizung schreiben
+         * (befehle_mqtt_steuern, zweiter Haken) - beide ab Werk aus. mqtt_zustand_schreiben ist
+         * der alte Weg (publish auf das Thema des Istwerts); ihn liest auch der Dienst. Bei einer
+         * Neuinstallation aus, ein Update von 3.1.11 traegt 1 ein (postupgrade.sh), eine Sicherung
+         * ohne den Schluessel ebenso (wi_konfig_einlesen()). */
+        'befehle_mqtt_ein'       => '0',
+        'befehle_mqtt_steuern'   => '0',
+        'mqtt_zustand_schreiben' => '0',
     );
 }
 
@@ -1163,6 +1174,9 @@ function wi_wert_taugt($k, $v)
         case 'dp_log':
         case 'mqtt':
         case 'pull_on_write':
+        case 'befehle_mqtt_ein':
+        case 'befehle_mqtt_steuern':
+        case 'mqtt_zustand_schreiben':
             return preg_match('/^[01]$/', $v) === 1;
         case 'ism8i_port':
         case 'input_port':
@@ -1263,6 +1277,7 @@ function wi_konfig_einlesen($roh)
     $neu = wi_defaults();
     $bekannt = array_keys($neu);
     $gefunden = 0;
+    $wi_da = array();
     /* Nr. 36 b (seit 3.1.8): die Sprachausgabe (dritte Rueckgabe). */
     $ans = array();
     $tts_roh = null;
@@ -1312,10 +1327,17 @@ function wi_konfig_einlesen($roh)
             continue;
         }
         $neu[$k] = $f[1];
+        $wi_da[$k] = true;
         $gefunden++;
     }
     if ($gefunden === 0) {
         $mangel[] = wi_t('MELDUNG.SICH_LEER');
+    }
+    /* Gruppe 5 (3.1.12, Entwurf wo E2): eine Sicherung bis 3.1.11 kennt mqtt_zustand_schreiben nicht. Sie stammt
+     * aus einer Anlage, in der der alte Schreibweg (publish auf das Zustandsthema) ohne Haken wirkte - wie beim
+     * Update gilt er dann weiter (1). Die beiden Haken der Befehlsbruecke bleiben auf der Vorgabe (aus). */
+    if ($gefunden > 0 && !isset($wi_da['mqtt_zustand_schreiben'])) {
+        $neu['mqtt_zustand_schreiben'] = '1';
     }
     /* Nr. 36 b (seit 3.1.8): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt
      * die Datei eines (auch als Liste, Zahl oder null), stammt sie nicht aus "Einstellungen
@@ -1813,6 +1835,10 @@ function wi_mqtt_feste_themen()
         'online'      => array(1, 'MQTT.B_ONLINE'),
         'zeitstempel' => array(0, 'MQTT.B_ZEIT'),
         'zaehler'     => array(0, 'MQTT.B_ZAEHLER'),
+        // Gruppe 5 (3.1.12, Entwurf wo E8): Lebenszeichen in Hausform, im selben Herzschlag, nie retained.
+        'status/zaehler' => array(0, 'MQTT.B_ST_ZAEHLER'),
+        'status/ok'      => array(0, 'MQTT.B_ST_OK'),
+        'status/ts'      => array(0, 'MQTT.B_ST_TS'),
     );
 }
 
@@ -3043,4 +3069,697 @@ function wi_ansage_pruefzeilen($cfg)
         $z[] = array(1, wi_t('SPRACHAUSGABE.PZ_ANLAESSE'), $txt);
     }
     return $z;
+}
+
+/* ==================================================================
+ * Gruppe 5 / MQTT (3.1.12): Namenstabelle, Hakenliste, Gateway-Abo und Befehlsbruecke
+ *
+ * Grundlage: Musterprojekt/entwurf_gruppe5_wo.txt (E1-E18 nach Empfehlung bzw. nach
+ * ENTSCHEIDUNGEN_GRUPPE5_MQTT.md), Bauvorschrift wz_bild/GRUPPE5_BAUVORSCHRIFT.md.
+ *
+ * Werte: fuer Werte ueber das MQTT-Gateway gibt es keine Importvorlage mehr als Hauptweg, sondern je Wert einen
+ * einfachen Virtuellen Eingang mit dem Namen, den das Gateway vergibt (Gruppe 1 Nachtrag 2, R2_078). Die Namen
+ * kommen aus EINER Funktion (wi_mqtt_gateway_name()) fuer Namenstabelle, Hakenliste, Baustein-Liste und
+ * Selbstpruefung. Die Vorlagen "MQTT-Eingaenge" (VirtualHttpIn-Kunstgriff) und "MQTT-Ausgaenge" bleiben fuer
+ * bestehende Anlagen.
+ *
+ * Befehle (Hausherr 21.10.2026, E1): ueber die gemeinsame Befehlsbruecke (bin/befehlsbruecke.php, Stammfassung
+ * Werkzeuge/gemeinsam), Thema <praefix>/befehl/<geraet>/<datenpunkt>, uebergeben an wi_befehl_senden() - denselben
+ * Befehls-Port, den Schreibprobe und SG-Modul benutzen. Plausibilitaet (%PLAUSIBEL), 60-s-Gleichwertsperre (C6),
+ * Zaehler und ISM8-Pruefung bleiben im Dienst; die Bruecke bringt Haken, zweiten Haken, Quittung und ein eigenes
+ * Befehlsthema neben dem Istwert. Kein -1/-999 (E10): der Dienst ist ein Relais.
+ * ================================================================== */
+
+/** Der Name, unter dem das MQTT-Gateway ein Thema an den Miniserver gibt: "/", Leerzeichen und "%" werden "_"
+ *  (Regeln/07, build_vi_name des Gateways V2; V1 gleich). Umlaute bleiben. Thema MIT Praefix. */
+function wi_mqtt_gateway_name($thema)
+{
+    return str_replace(array('/', ' ', '%'), '_', (string) $thema);
+}
+
+/**
+ * Die Eingaenge der drei Musterseiten - EINE Quelle fuer Baustein-Liste, Namenstabelle und Hakenliste:
+ * array(Seite => array(Nr => Art)). Art: array('pre', Thema ohne Praefix), array('dp', Kennung der Firmware) oder
+ * array('kr', Datenpunkt des Heizkreises aus dem Reiter SG-Ready, ab Werk "direkt").
+ */
+function wi_muster_eingaenge()
+{
+    return array(
+        1 => array(1 => array('pre', 'status/zaehler'), 2 => array('pre', 'status/ok'), 10 => array('dp', 1),
+                   11 => array('dp', 53), 12 => array('dp', 372), 17 => array('dp', 2)),
+        2 => array(1 => array('dp', 4), 2 => array('dp', 364), 3 => array('dp', 6), 5 => array('dp', 8),
+                   6 => array('kr', 'raum'), 7 => array('dp', 3), 8 => array('dp', 9), 9 => array('dp', 10),
+                   11 => array('dp', 197), 13 => array('dp', 7), 14 => array('kr', 'ww_soll'),
+                   15 => array('dp', 11), 16 => array('kr', 'ww_modus'), 18 => array('dp', 13)),
+        3 => array(11 => array('kr', 'hk_modus'), 12 => array('kr', 'korrektur'), 14 => array('pre', 'sg/laden'),
+                   15 => array('pre', 'sg/dimmen'), 16 => array('pre', 'sg/fenster'),
+                   17 => array('pre', 'sg/naechster_preis'), 18 => array('pre', 'sg/lage')),
+    );
+}
+
+/** Die Befehle der Musterseite "WOLF ISM NG Bedienung": Nr => Datenpunkt des Heizkreises; das Thema rechnet
+ *  wi_bb_name() aus der Firmware, die Liste nennt es fuer Firmware 1.8, Kreis "direkt", Praefix wolf_ng. */
+function wi_muster_befehle()
+{
+    return array(3 => 'hk_modus', 6 => 'ww_modus', 8 => 'ww_soll', 10 => 'korrektur');
+}
+
+/** Rechengrundlage der Baustein-Namen: Praefix, Firmware, Datenpunkte nach Kennung, Kreis-Datenpunkte. */
+function wi_baustein_kx($cfg, $dps)
+{
+    if (!function_exists('wi_sg_punkte')) {
+        require_once __DIR__ . '/wi_sg.php';
+    }
+    $kx = array('pre' => wi_cfg($cfg, 'praefix', 'wolf_ng'), 'fw' => wi_cfg($cfg, 'fw_version', '1.8'),
+                'dp' => array(), 'kr' => array());
+    foreach ($dps as $d) {
+        $kx['dp'][(int) $d['id']] = $d;
+    }
+    $kreise = wi_sg_kreise();
+    $kreis = wi_cfg($cfg, 'sg_kreis', 'direkt');
+    if (!isset($kreise[$kreis])) {
+        $kreis = 'direkt';
+    }
+    foreach (wi_sg_punkte($cfg, $kreis) as $k => $p) {
+        $kx['kr'][$k] = (int) $p['id'];
+    }
+    foreach ($dps as $d) {   // die Raumtemperatur des Kreises ist nur lesbar, wi_sg_punkte() kennt sie nicht
+        if ($d['geraet'] === $kreise[$kreis] && $d['name'] === 'Raumtemperatur') {
+            $kx['kr']['raum'] = (int) $d['id'];
+        }
+    }
+    return $kx;
+}
+
+/** Der Datenpunkt zu einer Art 'dp'/'kr' oder null (fehlt in dieser Firmware). */
+function wi_baustein_dp($art, $kx)
+{
+    $id = $art[0] === 'dp' ? (int) $art[1] : (isset($kx['kr'][$art[1]]) ? $kx['kr'][$art[1]] : 0);
+    return isset($kx['dp'][$id]) ? $kx['dp'][$id] : null;
+}
+
+/** Name einer Listenzeile mit eigenem Praefix, eigener Firmware und eigenem Heizkreis (bis 3.1.11 in index.php). */
+function wi_baustein_name($art, $kx)
+{
+    if ($art[0] === 'pre') {
+        return wi_mqtt_gateway_name($kx['pre'] . '/' . $art[1]);
+    }
+    $d = wi_baustein_dp($art, $kx);
+    if ($d === null) {
+        return sprintf(wi_t('BAUSTEIN.NAME_FEHLT'), $kx['fw']);
+    }
+    return wi_mqtt_gateway_name(wi_topic_pre($kx['pre'], $d));
+}
+
+/** Bereichs- und Bedeutungsangabe der festen Themen (ohne Praefix): Thema => array(Bereich, Sprachschluessel,
+ *  retained, Text). */
+function wi_mqtt_feste_info()
+{
+    return array(
+        'status/zaehler'     => array("0 \xe2\x80\xa6 999", 'MQTT.B_ST_ZAEHLER', false, false),
+        'status/ok'          => array("0 \xe2\x80\xa6 1", 'MQTT.B_ST_OK', false, false),
+        'status/ts'          => array("0 \xe2\x80\xa6 2147483647 s", 'MQTT.B_ST_TS', false, false),
+        'status/befehle'     => array("-1 \xe2\x80\xa6 1", 'MQTT.B_ST_BEFEHLE', false, false),
+        'online'             => array("0 \xe2\x80\xa6 1", 'MQTT.B_ONLINE', true, false),
+        'zaehler'            => array("0 \xe2\x80\xa6 999", 'MQTT.B_ZAEHLER', false, false),
+        'zeitstempel'        => array("0 \xe2\x80\xa6 2147483647 s", 'MQTT.B_ZEIT', false, false),
+        'sg/lage'            => array('normal | laden | dimmen | aus', 'MQTT.B_SG_LAGE', false, true),
+        'sg/laden'           => array("0 \xe2\x80\xa6 1", 'MQTT.B_SG_LADEN', false, false),
+        'sg/dimmen'          => array("-1 \xe2\x80\xa6 1", 'MQTT.B_SG_DIMMEN', false, false),
+        'sg/fenster'         => array("0 \xe2\x80\xa6 24", 'MQTT.B_SG_FENSTER', false, false),
+        'sg/naechster_start' => array("0 \xe2\x80\xa6 2147483647 s", 'MQTT.B_SG_NAECHSTER_START', false, false),
+        'sg/naechster_preis' => array("-1 \xe2\x80\xa6 1000 ct/kWh", 'MQTT.B_SG_NAECHSTER_PREIS', false, false),
+        'sg/ts'              => array("0 \xe2\x80\xa6 2147483647 s", 'MQTT.B_SG_TS', false, false),
+    );
+}
+
+/**
+ * Die Namenstabelle (Reiter "Einbindung in Loxone", Schritt 4) - EINE Liste fuer Tabelle, Hakenliste und
+ * Selbstpruefung. Zuerst die 27 Eingaenge der Musterseiten in Listenfolge, dann status/befehle (Haken, keine
+ * Musterseite), dann die weiteren Themen (feste Themen, SG-Themen ohne Musterplatz, alle uebrigen lesbaren
+ * Datenpunkte der eingestellten Firmware ohne Datum/Uhrzeit). Je Zeile: thema (voll), name, bedeutung (Text,
+ * fertig), bereich, text (bool), retained (bool), muster (bool), haken (bool), fehlt (Musterzeile ohne Datenpunkt).
+ */
+function wi_mqtt_namen($cfg)
+{
+    $dps = wi_datenpunkte(wi_cfg($cfg, 'fw_version', '1.8'));
+    $kx = wi_baustein_kx($cfg, $dps);
+    $pre = $kx['pre'];
+    $info = wi_mqtt_feste_info();
+    $aus = array();
+    $da = array();
+    $fest = function ($t, $muster, $haken) use ($pre, $info) {
+        $i = $info[$t];
+        return array('thema' => $pre . '/' . $t, 'name' => wi_mqtt_gateway_name($pre . '/' . $t),
+                     'bedeutung' => wi_t($i[1]), 'bereich' => $i[0], 'text' => $i[3], 'retained' => $i[2],
+                     'muster' => $muster, 'haken' => $haken, 'fehlt' => false);
+    };
+    $dp = function ($d, $muster) use ($pre) {
+        list($min, $max, $unit) = wi_grenzen($d['dpt'], $d['einheit']);
+        $u = trim(preg_replace('/<v(\.\d)?>/', '', (string) $unit));
+        $t = wi_topic_pre($pre, $d);
+        return array('thema' => $t, 'name' => wi_mqtt_gateway_name($t),
+                     'bedeutung' => $d['geraet'] . ' - ' . $d['name'],
+                     'bereich' => ($min !== '' ? $min . " \xe2\x80\xa6 " . $max : '') . ($u !== '' ? ' ' . $u : ''),
+                     'text' => false, 'retained' => wi_ist_zustand($d['dpt'], $d['io']),
+                     'muster' => $muster, 'haken' => $muster, 'fehlt' => false);
+    };
+    foreach (wi_muster_eingaenge() as $seite => $nrn) {
+        foreach ($nrn as $nr => $art) {
+            if ($art[0] === 'pre') {
+                $z = $fest($art[1], true, true);
+            } else {
+                $d = wi_baustein_dp($art, $kx);
+                if ($d === null) {
+                    $aus[] = array('thema' => '', 'name' => sprintf(wi_t('BAUSTEIN.NAME_FEHLT'), $kx['fw']),
+                                   'bedeutung' => $seite . '/#' . $nr, 'bereich' => '', 'text' => false,
+                                   'retained' => false, 'muster' => true, 'haken' => false, 'fehlt' => true);
+                    continue;
+                }
+                $z = $dp($d, true);
+            }
+            if (isset($da[$z['thema']])) {
+                continue;
+            }
+            $da[$z['thema']] = true;
+            $aus[] = $z;
+        }
+    }
+    $z = $fest('status/befehle', false, true);
+    $da[$z['thema']] = true;
+    $aus[] = $z;
+    foreach (array_keys($info) as $t) {
+        if (!isset($da[$pre . '/' . $t])) {
+            $da[$pre . '/' . $t] = true;
+            $aus[] = $fest($t, false, false);
+        }
+    }
+    foreach ($dps as $d) {
+        if (strpos($d['io'], 'Out') === false || in_array($d['dpt'], array('DPT_TimeOfDay', 'DPT_Date'), true)) {
+            continue;
+        }
+        $z = $dp($d, false);
+        if (!isset($da[$z['thema']])) {
+            $da[$z['thema']] = true;
+            $aus[] = $z;
+        }
+    }
+    return $aus;
+}
+
+/**
+ * Pruefzeile "Namenstabelle" (Entwurf wo 2.4): jeder Name der Musterseiten ist ein Thema der eingestellten Firmware
+ * bzw. ein festes Thema des Dienstes, und jedes dieser Themen steht in der Tabelle. Die Gegenseite wird OHNE
+ * wi_mqtt_gateway_name() gebildet (strtr). $namen: fuer die Gegenprobe (ein falsch geschriebener Name muss rot
+ * werden). Rueckgabe array(1|0, Text).
+ */
+function wi_mqtt_namen_probe($cfg, $namen = null)
+{
+    $dps = wi_datenpunkte(wi_cfg($cfg, 'fw_version', '1.8'));
+    $kx = wi_baustein_kx($cfg, $dps);
+    $tab = wi_mqtt_namen($cfg);
+    if ($namen === null) {
+        $namen = array();
+        foreach ($tab as $z) {
+            if ($z['muster'] && !$z['fehlt']) {
+                $namen[] = $z['name'];
+            }
+        }
+    }
+    $soll = array();
+    $fehlt = array();
+    foreach (wi_muster_eingaenge() as $seite => $nrn) {
+        foreach ($nrn as $nr => $art) {
+            if ($art[0] === 'pre') {
+                $t = $kx['pre'] . '/' . $art[1];
+            } else {
+                $d = wi_baustein_dp($art, $kx);
+                if ($d === null) {
+                    $fehlt[] = $seite . '/#' . $nr;
+                    continue;
+                }
+                $t = $kx['pre'] . '/' . wi_mqtt_friendly($d['geraet']) . '/' . wi_mqtt_friendly($d['name']);
+            }
+            $soll[strtr($t, array('/' => '_', ' ' => '_', '%' => '_'))] = true;
+        }
+    }
+    $soll = array_keys($soll);
+    $nur_tabelle = array_values(array_diff($namen, $soll));
+    $nur_themen = array_values(array_diff($soll, $namen));
+    if ($nur_tabelle || $nur_themen) {
+        return array(0, sprintf(wi_t('PZ.NAMEN_NEIN'),
+            $nur_tabelle ? implode(', ', $nur_tabelle) : '-', $nur_themen ? implode(', ', $nur_themen) : '-'));
+    }
+    if ($fehlt) {
+        return array(-1, sprintf(wi_t('PZ.NAMEN_FEHLT'), $kx['fw'], implode(', ', $fehlt)));
+    }
+    $haken = 0;
+    foreach ($tab as $z) {
+        if ($z['haken']) {
+            $haken++;
+        }
+    }
+    return array(1, sprintf(wi_t('PZ.NAMEN_JA'), count($namen), $haken));
+}
+
+/**
+ * Das Abo fuer Gateway V1 (Entwurf wo E11, Bauart ev_abo_datei() EVCC 0.9.45): config/plugins/<ordner>/
+ * mqtt_subscriptions.cfg traegt "<praefix>/#"; das Gateway liest die Plugin-Abos selbst. Mitgeliefert mit
+ * "wolf_ng/#", nachgefuehrt beim Speichern des Reiters MQTT, beim Zurueckspielen und in bin/wolf_sg.php --einmal
+ * (alle fuenf Minuten aus cron.05min) - ein Update spielt die Konfiguration aus der Sicherung zurueck, die Datei
+ * kommt aber aus dem Paket. Rueckgabe array(Pfad, liegt richtig).
+ */
+function wi_abo_datei($praefix, $schreiben = false)
+{
+    $p = wi_paths();
+    if ($p['home'] === '') {
+        return array('', false);
+    }
+    $ordner = dirname($p['config']);
+    $pfad = $ordner . '/mqtt_subscriptions.cfg';
+    $soll = (string) $praefix . '/#';
+    $roh = is_readable($pfad) ? (string) @file_get_contents($pfad) : '';
+    $da = in_array($soll, array_map('trim', preg_split('/\r?\n/', $roh)), true);
+    if ($schreiben && $roh !== $soll . "\n" && is_dir($ordner)
+        && preg_match('/^[a-z0-9_-]{1,32}$/', (string) $praefix)) {
+        $tmp = $pfad . '.tmp.' . getmypid();
+        if (@file_put_contents($tmp, $soll . "\n") === strlen($soll) + 1) {
+            @chmod($tmp, 0644);
+            if (@rename($tmp, $pfad)) {
+                $da = true;
+            } else {
+                @unlink($tmp);
+            }
+        } else {
+            @unlink($tmp);
+        }
+    }
+    return array($pfad, $da);
+}
+
+/* ---------------- Befehle: Tabelle der Befehlsbruecke aus der Datenpunkttabelle ---------------- */
+
+/** Plausibilitaetsbereiche je Datenpunktname - dieselbe Tabelle wie %PLAUSIBEL in bin/wolf_ism8i.pl (Herkunft
+ *  dort: ISM8i-Betriebsanleitung 10/2024, S. 46-47). Sie steht zwangslaeufig zweimal da; der Reiter Test vergleicht
+ *  beide (wi_plausibel_pruefen()). */
+function wi_bb_plausibel()
+{
+    return array(
+        'Warmwassersolltemperatur'     => array(20, 80),
+        'Sollwertkorrektur'            => array(-4, 4),
+        'Sparfaktor'                   => array(0, 10),
+        'Kesselsolltemperaturvorgabe'  => array(20, 90),
+        'Sammlersolltemperaturvorgabe' => array(20, 90),
+        'Programmwahl Heizkreis'       => array(0, 3),
+        'Programmwahl Mischer'         => array(0, 3),
+    );
+}
+
+/** Befehlsname eines Datenpunkts (Entwurf wo 3.2, E3): Themenrest wie wi_topic_pre() (wi_mqtt_friendly von Geraet
+ *  und Name), Umlaute ausgeschrieben (strtr - PHP 8.5 am Geraet hat kein mbstring), klein, jedes andere Zeichen
+ *  ausser a-z0-9_/ wird "_". Beispiel: direkter/heizkreis/warmwassersolltemperatur. */
+function wi_bb_name($d)
+{
+    $t = wi_mqtt_friendly($d['geraet']) . '/' . wi_mqtt_friendly($d['name']);
+    $t = strtr($t, array("\xc3\xa4" => 'ae', "\xc3\xb6" => 'oe', "\xc3\xbc" => 'ue', "\xc3\x84" => 'ae', "\xc3\x96" => 'oe',
+                        "\xc3\x9c" => 'ue', "\xc3\x9f" => 'ss'));
+    return preg_replace('#[^a-z0-9_/]#', '_', strtolower($t));
+}
+
+/** Art und Bereich eines schreibbaren Datenpunkts fuer die Bruecke (Entwurf wo 3.2, E4) oder null (Datum,
+ *  Uhrzeit und unbekannte Typen nimmt nur der Befehls-Port als Text). Die Feinpruefung bleibt im Dienst:
+ *  Warmwasser-Programm nur 0, 2, 4; CWL-Programm nur 0, 1, 3. */
+function wi_bb_art($d)
+{
+    $pl = wi_bb_plausibel();
+    $dpt = (string) $d['dpt'];
+    if (in_array($dpt, array('DPT_Switch', 'DPT_Bool', 'DPT_Enable', 'DPT_OpenClose'), true)) {
+        return array('art' => 'schalter');
+    }
+    if ($dpt === 'DPT_Scaling') {
+        return array('art' => 'ganz', 'min' => 0, 'max' => 100);
+    }
+    if ($dpt === 'DPT_HVACMode') {
+        $b = isset($pl[$d['name']]) ? $pl[$d['name']] : array(0, 3);
+        return array('art' => 'ganz', 'min' => (int) $b[0], 'max' => (int) $b[1]);
+    }
+    if ($dpt === 'DPT_DHWMode') {
+        return array('art' => 'ganz', 'min' => 0, 'max' => 4);
+    }
+    if ($dpt === 'DPT_Value_Temp' || $dpt === 'DPT_Value_Tempd') {
+        if (isset($pl[$d['name']])) {
+            $b = $pl[$d['name']];
+        } else {
+            list($mi, $ma) = wi_grenzen($dpt, $d['einheit']);
+            $b = array((float) $mi, (float) $ma);
+        }
+        return array('art' => 'zahl', 'min' => $b[0], 'max' => $b[1]);
+    }
+    return null;
+}
+
+/** Geraetename ohne Klammer- und Pluszusatz fuer den Titel ("Direkter Heizkreis + direktes Warmwasser" ->
+ *  "Direkter Heizkreis"). */
+function wi_bb_geraet($g)
+{
+    return trim((string) preg_replace('/\s*[\(\+].*$/u', '', (string) $g));
+}
+
+/**
+ * Die Befehle der Zuordnungstabelle (bin/befehle_zuordnung.php), gebaut aus der Datenpunkttabelle der eingestellten
+ * Firmware: EIN Eintrag je schreibbarem Datenpunkt ausser Datum/Uhrzeit (FW 1.8/1.9: 63). Alle eingreifend (zweiter
+ * Haken befehle_mqtt_steuern), Sperrzeit 0 s mit Begruendung (E5), Quittung "ausgefuehrt". $geraete: nur diese
+ * Geraete (Vorlage), null = alle. Ein Name, der die Regel der Bruecke (a-z0-9_, 1-40 Zeichen je Ebene, hoechstens
+ * 8 Ebenen) nicht erfuellt, wird ausgelassen - nachgerechnet fuer alle fuenf Firmwares: keiner.
+ */
+function wi_bb_befehle($cfg, $geraete = null)
+{
+    $grund = 'Der Dienst sendet dasselbe Telegramm binnen 60 s nicht noch einmal (C6, Antwort UNVERAENDERT). Eine '
+        . 'Sperrminute der Bruecke je Name UND Wert verschluckte einen gewollten Rueckwechsel: Warmwasser 48 -> 50 -> '
+        . '48 Grad binnen 60 s liesse die Heizung auf 50 Grad stehen. Ereignisse (1x Warmwasserladung, Filterwarnung '
+        . 'zuruecksetzen) nimmt C6 bewusst aus (Entwurf wo E5).';
+    $aus = array();
+    foreach (wi_datenpunkte(wi_cfg($cfg, 'fw_version', '1.8')) as $d) {
+        if (strpos($d['io'], 'In') === false) {
+            continue;
+        }
+        if ($geraete !== null && !in_array($d['geraet'], $geraete, true)) {
+            continue;
+        }
+        $a = wi_bb_art($d);
+        if ($a === null) {
+            continue;
+        }
+        $name = wi_bb_name($d);
+        $ebenen = explode('/', $name);
+        $gut = count($ebenen) <= 8;
+        foreach ($ebenen as $x) {
+            if (!preg_match('/^[a-z0-9_]{1,40}$/', $x)) {
+                $gut = false;
+            }
+        }
+        if (!$gut || $ebenen[count($ebenen) - 1] === 'quittung' || isset($aus[$name])) {
+            continue;
+        }
+        $id = (int) $d['id'];
+        $aus[$name] = $a + array(
+            'eingreifend' => true, 'sperre_s' => 0, 'begruendung' => $grund,
+            'titel' => 'WOLF ISM NG ' . wi_bb_geraet($d['geraet']) . ' ' . $d['name'] . ' (MQTT)',
+            'kachel' => 'BEFEHL.K_DP', 'quittung' => 'ausgefuehrt', 'kennung' => $id,
+            'tun' => function ($w, $t) use ($id) {
+                return wi_befehl_bruecke(wi_befehl_senden(wi_config_read(), $id . ';' . $w));
+            },
+        );
+    }
+    return $aus;
+}
+
+/** Die Antwort des Befehls-Ports fuer die Bruecke: array(bool, Grund). "OK ..." (auch UNVERAENDERT=1) heisst
+ *  angenommen; "ERR <GRUND> ..." abgelehnt mit dem Grund (KEINE_ISM8_VERBINDUNG, BEREICH, ABGEWIESEN, SENDEN,
+ *  ABSENDER); keine Antwort: DIENST_ANTWORTET_NICHT (Dienst steht oder der Port ist belegt). */
+function wi_befehl_bruecke($antwort)
+{
+    $a = trim((string) $antwort);
+    if ($a === '') {
+        return array(false, 'DIENST_ANTWORTET_NICHT');
+    }
+    if (substr($a, 0, 2) === 'OK') {
+        return array(true, '');
+    }
+    if (preg_match('/^ERR ([A-Z0-9_]+)/', $a, $m)) {
+        return array(false, $m[1]);
+    }
+    return array(false, 'UNBEKANNTE_ANTWORT');
+}
+
+/** Einstellungen fuer die Zuordnung (Entwurf gemeinsam 2.5, wo E7): annehmen = Haken "Befehle ueber MQTT annehmen"
+ *  UND MQTT an UND Server eingeschaltet (ohne Dienst gaebe jede Nachricht nur "DIENST_ANTWORTET_NICHT"); eingreifend
+ *  = zweiter Haken "Heizung ueber MQTT stellen". */
+function wi_befehle_einstellungen()
+{
+    $c = wi_config_read();
+    $mqtt = wi_cfg($c, 'mqtt', '1') === '1';
+    return array('praefix' => wi_cfg($c, 'praefix', 'wolf_ng'),
+                 'annehmen' => wi_cfg($c, 'befehle_mqtt_ein', '0') === '1' && $mqtt && wi_cfg($c, 'enable', '0') === '1',
+                 'eingreifend' => wi_cfg($c, 'befehle_mqtt_steuern', '0') === '1', 'mqtt_ein' => $mqtt);
+}
+
+/** Protokoll der Bruecke: in das Serverprotokoll (wie wi_log_sg() in bin/wolf_sg.php), damit es im Reiter
+ *  Logdateien steht; dieselbe Zeile hoechstens stuendlich ist Sache der Bruecke (bb_log_gebremst). */
+function wi_log_bruecke($stufe, $text)
+{
+    $datei = wi_log_file('server');
+    if ($datei === '') {
+        $verz = wi_paths()['logdir'];
+        if ($verz === '' || (!is_dir($verz) && !@mkdir($verz, 0775, true))) {
+            return;
+        }
+        $datei = $verz . '/server.log';
+    }
+    $s = in_array($stufe, array('ERROR', 'WARN', 'WARNING'), true) ? ($stufe === 'ERROR' ? 'ERROR' : 'WARNING') : 'INFO';
+    @file_put_contents($datei, date('Y-m-d H:i:s') . ' <' . $s . '> ' . preg_replace('/[\r\n]+/', ' ', (string) $text) . "\n",
+                       FILE_APPEND);
+}
+
+/* ---------------- Befehlsbruecke (bin/befehlsbruecke.php, Stammfassung Werkzeuge/gemeinsam) ---------------- */
+
+/** Wo liegt bin/befehlsbruecke.php? Installiert unter bin/plugins/<ordner>, im Archiv neben webfrontend. */
+function wi_bruecke_datei()
+{
+    $p = wi_paths();
+    $kand = array();
+    if ($p['home'] !== '') {
+        $kand[] = $p['bindir'] . '/befehlsbruecke.php';
+    }
+    $kand[] = dirname(dirname(__DIR__)) . '/bin/befehlsbruecke.php';
+    foreach ($kand as $k) {
+        if (is_file($k)) {
+            return $k;
+        }
+    }
+    return '';
+}
+
+/** Die Bruecke als Bibliothek laden (BB_NUR_LADEN: kein Hauptteil). */
+function wi_bruecke_laden()
+{
+    if (function_exists('bb_waechter')) {
+        return true;
+    }
+    $f = wi_bruecke_datei();
+    if ($f === '') {
+        return false;
+    }
+    if (!defined('BB_NUR_LADEN')) {
+        define('BB_NUR_LADEN', true);
+    }
+    require_once $f;
+    return function_exists('bb_waechter');
+}
+
+/**
+ * Direktstart bzw. -stopp beim Speichern (Bauart wp_bruecke_schalten(), Waermepumpe 0.9.35): der Waechter
+ * (cron.01min) startet nach einem Start hoechstens alle 600 s neu. $neu_laden: die Firmware hat sich geaendert - die
+ * Bruecke laedt ihre Tabelle nur beim Start, also anhalten und neu starten. Rueckgabe
+ * array(''|'ein'|'aus'|'neu'|'start_fehl'|'stop_fehl', Ausgabe).
+ */
+function wi_bruecke_schalten($neu_laden = false)
+{
+    if (!wi_bruecke_laden()) {
+        return array('', '');
+    }
+    $p = bb_pfade();
+    if (!$p) {
+        return array('', '');
+    }
+    $e = wi_befehle_einstellungen();
+    $laeuft = (bool) bb_dienste();
+    if ($e['annehmen']) {
+        $art = 'ein';
+        if ($laeuft && !$neu_laden) {
+            return array('', '');
+        }
+        if ($laeuft) {
+            list($rc, $aus) = bb_sh($p, 'stop');
+            if ($rc !== 0 || bb_dienste()) {
+                return array('stop_fehl', $aus);
+            }
+            $art = 'neu';
+        }
+        list($rc, $aus) = bb_sh($p, 'start');
+        if ($rc === 0 && bb_dienste()) {
+            wi_log_bruecke('INFO', 'Befehlsbruecke beim Speichern ' . ($art === 'neu' ? 'neu ' : '') . 'gestartet.');
+            return array($art, $aus);
+        }
+        wi_log_bruecke('WARN', 'Befehlsbruecke: Start beim Speichern gescheitert (Rueckgabe ' . (int) $rc . '): '
+                       . substr($aus, 0, 200));
+        return array('start_fehl', $aus);
+    }
+    if (!$laeuft) {
+        return array('', '');
+    }
+    list($rc, $aus) = bb_sh($p, 'stop');
+    if ($rc === 0 && !bb_dienste()) {
+        wi_log_bruecke('INFO', 'Befehlsbruecke beim Speichern angehalten.');
+        return array('aus', $aus);
+    }
+    return array('stop_fehl', $aus);
+}
+
+/** Meldung zum Ergebnis von wi_bruecke_schalten() fuer die Einmalmeldung, '' ohne Ereignis. */
+function wi_bruecke_meldung($r)
+{
+    $t = array('ein' => 'BEFEHL.M_EIN', 'aus' => 'BEFEHL.M_AUS', 'neu' => 'BEFEHL.M_NEU');
+    if (isset($t[$r[0]])) {
+        return wi_t($t[$r[0]]);
+    }
+    if ($r[0] === 'start_fehl') {
+        return sprintf(wi_t('BEFEHL.M_START_FEHL'), wi_e(substr((string) $r[1], 0, 200)));
+    }
+    if ($r[0] === 'stop_fehl') {
+        return sprintf(wi_t('BEFEHL.M_STOP_FEHL'), wi_e(substr((string) $r[1], 0, 200)));
+    }
+    return '';
+}
+
+/** Die Befehlsliste der Bruecke (bb_liste(): EINE Quelle fuer Reiter und Vorlage) oder null. $geraete: nur die
+ *  Befehle dieser Geraete (Vorlage). */
+function wi_befehle_liste($geraete = null)
+{
+    if (!wi_bruecke_laden()) {
+        return null;
+    }
+    list($z) = bb_zuordnung_laden();
+    if ($z === null) {
+        return null;
+    }
+    list($f) = bb_zuordnung_pruefen($z);
+    if ($f) {
+        return null;
+    }
+    if ($geraete !== null) {
+        $z['befehle'] = wi_bb_befehle(wi_config_read(), $geraete);
+        if (!$z['befehle']) {
+            return array('befehle' => array());
+        }
+    }
+    return bb_liste($z, bb_einstellungen($z));
+}
+
+/** Vorlage "WOLF ISM NG MQTT-Befehle" (bb_vorlage()): eigener Virtueller Ausgang an den UDP-Eingang des Gateways,
+ *  nur die Befehle der angehakten Geraete. Rueckgabe array(name, inhalt, anzahl) oder null. */
+function wi_befehle_vorlage($geraete)
+{
+    $l = wi_befehle_liste($geraete);
+    if ($l === null) {
+        return null;
+    }
+    if (!$l['befehle']) {
+        return array('VQ_wolf_ism_mqtt.xml', '', 0);
+    }
+    $port = wi_mqtt_udpinport();
+    return array('VQ_wolf_ism_mqtt.xml', bb_vorlage($l, wi_localip(), $port > 0 ? $port : 11884), count($l['befehle']));
+}
+
+/** Zeile "Laeuft die Befehlsbruecke?" (Entwurf gemeinsam 2.11): array(1|0|-1, Text). Gemessen wird das Erzeugnis
+ *  (zustand.json: ts, abo, Zaehler) und ob ein Dienst argumentweise laeuft - wie der Waechter. */
+function wi_pruef_bruecke()
+{
+    if (!wi_bruecke_laden()) {
+        return array(0, wi_t('BEFEHL.P_FEHLT'));
+    }
+    list($z, $fehler) = bb_zuordnung_laden();
+    if ($z === null) {
+        return array(0, sprintf(wi_t('BEFEHL.P_DEFEKT'), $fehler));
+    }
+    list($f) = bb_zuordnung_pruefen($z);
+    if ($f) {
+        return array(0, sprintf(wi_t('BEFEHL.P_DEFEKT'), $f[0]));
+    }
+    $c = wi_config_read();
+    if (wi_cfg($c, 'befehle_mqtt_ein', '0') !== '1') {
+        return array(-1, wi_t('BEFEHL.P_AUS'));
+    }
+    if (wi_cfg($c, 'mqtt', '1') !== '1' || wi_cfg($c, 'enable', '0') !== '1') {
+        return array(-1, wi_t('BEFEHL.P_MQTT_AUS'));
+    }
+    if (!bb_pfade()) {
+        return array(-1, wi_t('BEFEHL.P_ARCHIV'));
+    }
+    $zu = bb_zustand_lesen();
+    $alter = ($zu && isset($zu['ts'])) ? time() - (int) $zu['ts'] : null;
+    if (!bb_dienste()) {
+        return array(0, wi_t('BEFEHL.P_STEHT'));
+    }
+    if ($alter === null || $alter > BB_WACHE_GRENZE) {
+        return array(0, sprintf(wi_t('BEFEHL.P_HAENGT'), (int) $alter));
+    }
+    if (empty($zu['abo'])) {
+        return array(0, sprintf(wi_t('BEFEHL.P_OHNE_ABO'), isset($zu['fehler']) ? (string) $zu['fehler'] : ''));
+    }
+    $zl = (isset($zu['zaehler']) && is_array($zu['zaehler'])) ? $zu['zaehler'] : array();
+    $t = sprintf(wi_t('BEFEHL.P_LAEUFT'), date('d.m.Y H:i', isset($zu['start']) ? (int) $zu['start'] : time()),
+                 isset($zl['angenommen']) ? (int) $zl['angenommen'] : 0, isset($zl['abgelehnt']) ? (int) $zl['abgelehnt'] : 0,
+                 isset($zl['verworfen']) ? (int) $zl['verworfen'] : 0);
+    if (!empty($zu['letzter']) && is_array($zu['letzter'])) {
+        $t .= ' ' . sprintf(wi_t('BEFEHL.P_LETZTER'), (string) $zu['letzter']['name'],
+                            (string) $zu['letzter']['ergebnis'], max(0, time() - (int) $zu['letzter']['zeit']));
+    }
+    if (!empty($zl['verworfen'])) {
+        $t .= ' ' . wi_t('BEFEHL.P_VERWORFEN');
+    }
+    return array(1, $t);
+}
+
+/** Die Zeilen von "befehlsbruecke.php --pruefen" (bb_pruefen()); leer ohne Bruecke. */
+function wi_bruecke_pruefzeilen()
+{
+    if (!wi_bruecke_laden()) {
+        return array();
+    }
+    ob_start();
+    bb_pruefen();
+    $aus = (string) ob_get_clean();
+    return array_values(array_filter(explode("\n", $aus), 'strlen'));
+}
+
+/**
+ * Wertebereiche: wi_bb_plausibel() gegen %PLAUSIBEL in bin/wolf_ism8i.pl (Bauart wi_zustandstypen_pruefen()).
+ * Rueckgabe array(true|false|null, Text).
+ */
+function wi_plausibel_pruefen()
+{
+    $p = wi_paths();
+    $quelle = '';
+    foreach (array($p['bindir'] . '/wolf_ism8i.pl', dirname(dirname(__DIR__)) . '/bin/wolf_ism8i.pl') as $k) {
+        if (is_file($k)) {
+            $quelle = (string) @file_get_contents($k);
+            break;
+        }
+    }
+    if ($quelle === '' || !preg_match('/my\s+%PLAUSIBEL\s*=\s*\((.*?)\);/s', $quelle, $m)) {
+        return array(null, wi_t('PZ.PLAUS_UNLESBAR'));
+    }
+    preg_match_all("/'([^']+)'\s*=>\s*\[\s*(-?[0-9.]+)\s*,\s*(-?[0-9.]+)\s*\]/", $m[1], $t, PREG_SET_ORDER);
+    $dienst = array();
+    foreach ($t as $x) {
+        $dienst[$x[1]] = array((float) $x[2], (float) $x[3]);
+    }
+    $php = array();
+    foreach (wi_bb_plausibel() as $k => $b) {
+        $php[$k] = array((float) $b[0], (float) $b[1]);
+    }
+    if (!$dienst) {
+        return array(null, wi_t('PZ.PLAUS_UNLESBAR'));
+    }
+    $anders = array();
+    foreach (array_unique(array_merge(array_keys($dienst), array_keys($php))) as $k) {
+        if (!isset($dienst[$k]) || !isset($php[$k]) || $dienst[$k] !== $php[$k]) {
+            $anders[] = $k;
+        }
+    }
+    if ($anders) {
+        return array(false, sprintf(wi_t('PZ.PLAUS_NEIN'), implode(', ', $anders)));
+    }
+    return array(true, sprintf(wi_t('PZ.PLAUS_JA'), count($php)));
 }

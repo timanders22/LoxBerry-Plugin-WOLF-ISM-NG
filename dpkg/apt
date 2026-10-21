@@ -23,3 +23,7 @@ libnet-mqtt-simple-perl
 # Zeile 29 - aufgerufen wird derzeit nichts daraus, aber ein "use" ist ein
 # "use": fehlt das Paket, bricht das Skript beim Start ab.
 libhtml-parser-perl
+
+# Gruppe 5 / MQTT (3.1.12): die Befehlsbruecke (bin/befehlsbruecke.php) liest die Befehle ueber mosquitto_sub und
+# sendet Quittung und Lebenszeichen ueber mosquitto_pub. Auf einem LoxBerry mit MQTT-Gateway meist schon da.
+mosquitto-clients

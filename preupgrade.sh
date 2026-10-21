@@ -70,6 +70,14 @@ else
     echo "<WARNING> Waechter kann den Dienst waehrend der Installation starten."
 fi
 
+# Gruppe 5 / MQTT (3.1.12): die Befehlsbruecke anhalten. Die Marke liegt schon (oben) - der Waechter im Minutentakt
+# (cron.01min) startet sie bis postupgrade.sh nicht neu; es ist dieselbe Marke, die befehlsbruecke.sh liest. Bis
+# 3.1.11 gab es keine Bruecke (dann fehlt die Datei).
+BBSH="$WI_BASE/bin/plugins/$WI_PDIR/befehlsbruecke.sh"
+if [ -f "$BBSH" ]; then
+    echo "<INFO> Befehlsbruecke: $(timeout 40 bash "$BBSH" stop 2>&1 | head -n 1)"
+fi
+
 # Traegt eine Konfigurationsdatei Inhalt? Entschieden nach INHALT, nie nach
 # Groesse (Muster 9 der Nachlese): eine Zeile "enable 0" oder "enable 1", die
 # der Dienst und daemon/daemon lesen. Dieselbe Regel steht in postinstall.sh

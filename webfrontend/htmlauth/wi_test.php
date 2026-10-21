@@ -351,6 +351,28 @@ function wi_pruefzeilen($cfg)
     list($ok6, $txt6) = wi_themen_pruefen();
     $z[] = array($ok6 === null ? -1 : ($ok6 ? 1 : 0), wi_t('PZ.THEMEN'), $txt6);
 
+    // --- Gruppe 5 / MQTT (3.1.12): Befehlsbruecke, Namenstabelle, Wertebereiche, Abo ------------
+    list($wi_bs, $wi_bt) = wi_pruef_bruecke();
+    $z[] = array($wi_bs, wi_t('PZ.BRUECKE'), $wi_bt);
+    $wi_bp = wi_bruecke_pruefzeilen();
+    if (!$wi_bp) {
+        $z[] = array(-1, wi_t('PZ.BRUECKE_PRUEFEN'), wi_t('BEFEHL.P_FEHLT'));
+    } else {
+        $wi_bf = array_values(preg_grep('/^\[FEHL\]/', $wi_bp));
+        $z[] = $wi_bf ? array(0, wi_t('PZ.BRUECKE_PRUEFEN'), sprintf(wi_t('PZ.BRUECKE_PRUEFEN_NEIN'), count($wi_bf),
+                                                                       trim(substr($wi_bf[0], 7))))
+                      : array(1, wi_t('PZ.BRUECKE_PRUEFEN'), sprintf(wi_t('PZ.BRUECKE_PRUEFEN_JA'), count($wi_bp)));
+    }
+    list($wi_ns, $wi_nt) = wi_mqtt_namen_probe($cfg);
+    $z[] = array($wi_ns, wi_t('PZ.NAMEN'), $wi_nt);
+    list($wi_ps, $wi_pt) = wi_plausibel_pruefen();
+    $z[] = array($wi_ps === null ? -1 : ($wi_ps ? 1 : 0), wi_t('PZ.PLAUS'), $wi_pt);
+    $wi_apre = wi_cfg($cfg, 'praefix', 'wolf_ng');
+    list($wi_apf, $wi_ada) = wi_abo_datei($wi_apre);
+    $z[] = $wi_apf === '' ? array(-1, wi_t('PZ.ABO'), wi_t('PZ.ABO_UNBEKANNT'))
+         : ($wi_ada ? array(1, wi_t('PZ.ABO'), sprintf(wi_t('PZ.ABO_JA'), $wi_apre . '/#'))
+                    : array(0, wi_t('PZ.ABO'), sprintf(wi_t('PZ.ABO_NEIN'), $wi_apre . '/#', $wi_apf)));
+
     // --- Betriebsart-Tabellen gegen das Perl ------------------------------
     list($ok3, $txt3) = wi_arten_pruefen($fw);
     $z[] = array($ok3 === null ? -1 : ($ok3 ? 1 : 0), wi_t('PZ.ARTEN'), $txt3);
@@ -462,7 +484,8 @@ function wi_themen_pruefen()
     if ($pl === '' || $sg === '') {
         return array(null, wi_t('PZ.THEMEN_UNLESBAR'));
     }
-    preg_match_all('#"\$hash\{praefix\}/([a-z_]+)"#', $pl, $a);
+    // Gruppe 5 (3.1.12): Themen mit Unterebene (status/zaehler, status/ok, status/ts) zaehlen mit.
+    preg_match_all('#"\$hash\{praefix\}/([a-z_]+(?:/[a-z_]+)*)"#', $pl, $a);
     preg_match_all("#'(sg/[a-z_]+)'#", $sg, $b);
     $dienst = array_values(array_unique($a[1]));
     $sgcode = array_values(array_unique($b[1]));

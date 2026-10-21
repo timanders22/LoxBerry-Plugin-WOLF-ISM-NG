@@ -10,6 +10,34 @@ Plugins dieses Hauses an den Loxone Music Server, MusicServer4Home, eine
 eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (seit 3.1.8, ab Werk
 aus; Adresse und Vorlage nur im Heimnetz, die Sprechtoken in keiner Sicherung).
 
+## Neu in 3.1.12
+
+Umstellung auf MQTT nach der Hausform (Gruppe 5): Werte in einfache Virtuelle Eingänge, Lebenszeichen in
+Hausform, Befehle über die gemeinsame Befehlsbrücke.
+
+* **Befehle über die Befehlsbrücke:** `publish wolf_ng/befehl/<gerät>/<datenpunkt> <wert>` an den UDP-Eingang
+  des MQTT-Gateways, etwa `wolf_ng/befehl/direkter/heizkreis/warmwassersolltemperatur 48`. Die Brücke prüft Art
+  und Bereich, legt gestaute Werte zusammen und gibt den Befehl an den Befehls-Port des Dienstes – dieselbe
+  Prüfung wie Schreibprobe und SG-Modul (Bereiche, 60-s-Gleichwertsperre, ISM8-Verbindung). Quittung unter
+  `…/befehl/<name>/quittung`, Lebenszeichen `wolf_ng/status/befehle`. Zwei Haken im Reiter MQTT, beide ab Werk
+  aus: „Befehle über MQTT annehmen“ und „Heizung über MQTT stellen“. Die Brücke braucht das Paket
+  `mosquitto-clients` (steht jetzt in `dpkg/apt`).
+* **Alter Schreibweg hinter einem eigenen Haken:** `publish` auf das Thema des Istwerts (Ausgangsvorlage „Wolf
+  ISM8 MQTT Befehle“) wirkt nur noch mit „Befehle über die Zustandsthemen annehmen (alter Weg)“. Ein Update von
+  3.1.11 setzt ihn – bestehende Anlagen schalten weiter; bei einer Neuinstallation ist er aus.
+* **Lebenszeichen in Hausform:** `status/zaehler`, `status/ok`, `status/ts` mit jedem Herzschlag, nie
+  zurückbehalten. `zaehler`, `zeitstempel` und `online` bleiben für bestehende Anlagen.
+* **Gateway V1:** `config/mqtt_subscriptions.cfg` mit `wolf_ng/#` wird mitgeliefert und dem Präfix nachgeführt
+  (beim Speichern und alle fünf Minuten) – der Handschritt „Abo eintragen“ entfällt.
+* **Reiter „Einbindung in Loxone“:** Namenstabelle mit Kopierknopf, Hakenliste für Gateway V2 (28 Haken),
+  Befehlstabelle, „Vorlage MQTT-Befehle“; die Vorlagen „MQTT-Eingänge“ und „MQTT-Ausgänge“ sowie UDP/TCP
+  zugeklappt unter „Bestehende Anlagen“. Die drei Musterseiten nutzen Virtuelle Eingänge und die Befehle am
+  gemeinsamen Ausgang „LoxBerry MQTT-Gateway“; „Keine frischen Daten“ hängt an `status/ok` statt an `online`.
+* Werte und Themen des Dienstes sind sonst unverändert; keine −1/−999 (der Dienst gibt nur weiter, was die
+  Heizung meldet; ob ein Wert frisch ist, zeigt `status/ok`). Die Deinstallation hält die Brücke an und greift
+  nicht mehr, wenn ein Plugin mit ähnlichem Namen deinstalliert wird. Gerendert unter PHP 7.4, 8.4 und 8.5,
+  Brücke am Prüfstand; nicht an einer Heizung (keine WOLF-Heizung, kein ISM8 im Haus).
+
 ## Neu in 3.1.11
 
 Einbindung in Loxone in Vollausstattung: drei Seiten aus dem

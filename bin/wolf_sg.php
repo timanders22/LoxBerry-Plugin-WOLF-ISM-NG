@@ -255,6 +255,13 @@ if ($wi_modus === '--zuruecknehmen') {
 $cfg = wi_config_read();
 $ernst = ($wi_modus === '--einmal');
 
+/* Gruppe 5 / MQTT (3.1.12, Entwurf wo E11): das Gateway-Abo (config/plugins/<ordner>/mqtt_subscriptions.cfg)
+ * dem Praefix nachfuehren - alle fuenf Minuten, vor jedem Ausstieg des SG-Moduls. Ein Update spielt die
+ * Konfiguration zurueck, die Abo-Datei kommt aber aus dem Paket (wolf_ng/#). */
+if ($ernst && wi_cfg($cfg, 'mqtt', '1') === '1') {
+    wi_abo_datei(wi_cfg($cfg, 'praefix', 'wolf_ng'), true);
+}
+
 /* C2 (Durchgang 02.10.2026): ist das Schreiben aus (sg_ein oder sg_senden
  * auf 0) und traegt der Merker noch einen Zwang, wird er EINMAL
  * zurueckgenommen. Schlaegt das fehl (Dienst oder ISM8 fehlt), versucht es

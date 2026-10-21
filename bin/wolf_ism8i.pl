@@ -167,6 +167,7 @@ use constant VOLLVERSAND_TAKT => 1800;  # s, voller Satz (M2, Regeln/07)
 my %cmd_puffer;            # C10: angesammelte Bytes je Befehlsverbindung
 my %cmd_letztes_byte;      # C10: Zeitpunkt des letzten Bytes
 my %befehl_letzt;          # C6: Datenpunkt => [Telegramm, Zeit] des zuletzt gesendeten
+my %zustand_verworfen;     # Gruppe 5: Thema => Zeit der letzten Meldung "alter Weg aus" (stuendlich)
 my $parse_grund = '';      # C8: warum parseInput zuletzt abwies ('BEREICH' oder '')
 my %erlaubte_absender;     # C7: Adresse => Herkunft
 my %fremde_absender;       # C7: Adresse => [zuletzt gemeldet, seither abgewiesen]
@@ -244,6 +245,9 @@ my %hash = (
              praefix        => 'wolf_ng' ,
              herzschlag     => '60' ,
              abgleich_takt  => '0' ,
+             # Gruppe 5 (3.1.12, Entwurf wo E2): Befehle auf den Zustandsthemen (alter Weg) nur mit diesem
+             # Schalter. Ab Werk 0; ein Update von 3.1.11 traegt 1 ein (postupgrade.sh).
+             mqtt_zustand_schreiben => '0' ,
 			);
 
 # Version of this script
@@ -569,6 +573,22 @@ sub received_MQTT
     if ($message eq "") {
         LOGDEB("Empty Message, clearing State");
         delete $mqtt_values{$topic};
+        return;
+    }
+    # Gruppe 5 (3.1.12, Entwurf wo E1/E2, Hausherr 21.10.2026): ein Befehl auf dem THEMA DES ISTWERTS (alter Weg,
+    # Ausgangsvorlage "Wolf ISM8 MQTT Befehle") wirkt nur noch mit "Befehle ueber die Zustandsthemen annehmen".
+    # Der neue Weg ist die Befehlsbruecke (<praefix>/befehl/..., Haken, Quittung, Befehls-Port). Erst hier
+    # gefragt: das Echo der eigenen Zustaende, der Letzte Wille und die Altlasten oben bleiben unberuehrt.
+    if ($hash{mqtt_zustand_schreiben} ne '1') {
+        my $jetzt_v = time;
+        if (!$zustand_verworfen{$topic} or $jetzt_v - $zustand_verworfen{$topic} >= 3600) {
+            $zustand_verworfen{$topic} = $jetzt_v;
+            LOGWARN(encode('UTF-8', "Befehl auf dem Zustandsthema $topic verworfen ($message) - der alte Weg ist "
+                  . "aus. Weg ueber die Befehlsbruecke nutzen (<praefix>/befehl/...) oder im Reiter MQTT "
+                  . "\"Befehle ueber die Zustandsthemen annehmen\" setzen."));
+        }
+        LOGINF(encode('UTF-8', "resetting MQTT to previous state: $id topic $topic: $value"));
+        publish_MQTT($id, $topic, $value, $retain);
         return;
     }
     LOGINF(encode('UTF-8', "received MQTT input ID: $id topic $topic: $message"));
@@ -940,6 +960,13 @@ sub start_event_loop($$) {
                 # der Dienst laengst tot war - genau das, wogegen es da ist.
                 fluechtig_senden("$hash{praefix}/zeitstempel", $jetzt);
                 fluechtig_senden("$hash{praefix}/zaehler", $zaehler_umlauf);
+                # Gruppe 5 (3.1.12, Entwurf wo E8): Lebenszeichen in Hausform (Regeln/07), im selben
+                # Herzschlag und ebenso nie retained. status/ok sagt dasselbe wie online, aber jede Minute
+                # und ohne Retain - ein Dienst, der stirbt, hinterlaesst keine "1". zaehler, zeitstempel
+                # und online bleiben fuer bestehende Anlagen.
+                fluechtig_senden("$hash{praefix}/status/zaehler", $zaehler_umlauf);
+                fluechtig_senden("$hash{praefix}/status/ok", online_jetzt());
+                fluechtig_senden("$hash{praefix}/status/ts", $jetzt);
             }
             # Auf dem UDP-Weg gibt es keinen retained-Speicher; dort ist der
             # umlaufende Zaehler das einzige, woran eine Aenderungs-
@@ -2118,6 +2145,10 @@ sub loadConfig
 	          } elsif ($fields[0] eq "abgleich_takt") {
 	             if ($fields[1] =~ m/^[0-9]+$/) {
 	                $hash{abgleich_takt} = $fields[1]; } else { $hash{abgleich_takt} = '0'; }
+	          } elsif ($fields[0] eq "mqtt_zustand_schreiben") {
+	             # Gruppe 5 (3.1.12, E2): alter Schreibweg ueber die Zustandsthemen.
+	             if ($fields[1] =~ m/^(1|0)$/) {
+	                $hash{mqtt_zustand_schreiben} = $fields[1]; } else { $hash{mqtt_zustand_schreiben} = '0'; }
 	          }
 		   }
 	    }
@@ -2177,6 +2208,7 @@ sub loadConfig
          print $fh "praefix $hash{praefix}\n";
          print $fh "herzschlag $hash{herzschlag}\n";
          print $fh "abgleich_takt $hash{abgleich_takt}\n";
+         print $fh "mqtt_zustand_schreiben $hash{mqtt_zustand_schreiben}\n";
 
      close $fh;
    }
