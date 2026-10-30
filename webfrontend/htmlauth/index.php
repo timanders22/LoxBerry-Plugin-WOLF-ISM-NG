@@ -338,6 +338,8 @@ if ($wi_post && isset($_POST['laden'])) {
             $wi_aneu['tts'] = ansage_sicherung_tokens_behalten($wi_aneu['tts'], $wi_ajetzt['tts']);
             if (!wi_ansage_schreiben($wi_aneu)) {
                 $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e(wi_ansage_datei()));
+            } elseif (!empty($wi_aneu['_spaet'])) {     // Welle Mehrfach-Ziele (3.1.13): Spaetliste (tts.ziele)
+                $wi_hinweise[] = wi_e(sprintf(wi_t('SPRACHAUSGABE.SICH_SPAET'), implode(', ', (array) $wi_aneu['_spaet'])));
             }
         } else {
             $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e($wi_p['config']));
@@ -457,6 +459,33 @@ if ($wi_post && isset($_POST['test']) && is_string($_POST['test'])) {
         $wi_eingaben = array('formular' => 'schreibprobe',
             'werte' => wi_eingaben_von(array('sp_id', 'sp_wert'), array()), 'falsch' => array());
     }
+}
+
+/* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
+ * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+if ($wi_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
+    /* Testansage (Nr. 36 b) wie wi_test_ausfuehren('ansage_test'): Titel und Text in den Reiter Test, ins Protokoll nur
+     * die Kurzform. */
+    $wi_tk = wi_ansage_k();
+    $wi_tnur = (isset($_POST['ansage_test_ziel']) && wi_mit_zielen()) ? ansage_test_ziel($_POST) : 0;
+    if (isset($_POST['ansage_test_ziel']) && $wi_tnur === 0) {
+        $wi_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    } elseif ($wi_tnur >= 1) {
+        $wi_tr = ansage_testansage(wi_tts(), $wi_tk, $wi_tnur);
+    } else {
+        $wi_tr = ansage_testansage(wi_tts(), $wi_tk);
+    }
+    wi_log('Testansage' . ($wi_tnur >= 1 ? ' an Ziel ' . $wi_tnur : '') . ': ' . ansage_kurz($wi_tr));
+    if ($wi_tr['stand'] === 1) {
+        $wi_test_text = wi_t('SPRACHAUSGABE.TEST_OK');
+    } elseif ($wi_tr['stand'] === -1) {
+        $wi_test_text = sprintf(wi_t('SPRACHAUSGABE.TEST_NICHTS'), ansage_kennung_text($wi_tr['kennung'], $wi_tk));
+    } else {
+        $wi_test_text = sprintf(wi_t('SPRACHAUSGABE.TEST_FEHL'), ansage_kennung_text($wi_tr['kennung'], $wi_tk));
+    }
+    $wi_test_titel = wi_t('SPRACHAUSGABE.TEST_TITEL');
+    $wi_tab = 'tab-test';
+    $wi_test_tab = $wi_tab;
 }
 
 /* ============ Speichern: Einstellungen - OHNE MQTT ============
@@ -703,9 +732,11 @@ if ($wi_post && isset($_POST['save_ansage'])) {
     $wi_av = wi_ansage_lesen();
     $wi_tmangel = array();
     $wi_tbean = array();
+    $wi_thinw = array();     // Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Hinweise des Moduls, die das Speichern nicht verhindern
     $wi_an = $wi_av;
     $wi_an['tts'] = ansage_formular_lesen($_POST, $wi_av['tts'], $wi_tmangel, $wi_tbean,
-                                          wi_ansage_opt(), wi_ansage_k());
+                                          wi_ansage_opt() + array(
+                                          'ziele' => wi_mit_zielen()), wi_ansage_k(), $wi_thinw);
     foreach (wi_ansage_anlaesse() as $wi_n) {
         $wi_an[$wi_n] = isset($_POST['ansage_' . $wi_n]) ? '1' : '0';
     }
@@ -723,10 +754,14 @@ if ($wi_post && isset($_POST['save_ansage'])) {
             }
         }
         $wi_eingaben = array('formular' => 'ansage', 'werte' => wi_eingaben_von($wi_x2w, $wi_x2h),
-                             'falsch' => array_values(array_unique($wi_tbean)));
+                             'falsch' => array_values(array_unique(array_map('wi_ziele_x2_name', $wi_tbean))));     // 3.1.13: name[N] -> name.N
+        $wi_eingaben['werte'] += wi_ziele_x2_werte();     // Welle Mehrfach-Ziele (3.1.13): die Tabelle flach als name.N
     } elseif (wi_ansage_schreiben($wi_an)) {
         $wi_saved = true;
         $wi_hinweis = wi_t('SPRACHAUSGABE.GESPEICHERT');
+        $wi_thl = array();     // Welle Mehrfach-Ziele (3.1.13): Hinweise des Moduls, an den Hinweis (maskiert bei der Ausgabe)
+        foreach ($wi_thinw as $wi_th) { $wi_thl[] = $wi_th['text']; }     // Welle Mehrfach-Ziele: erst nach dem Speichern
+        foreach ($wi_thl as $wi_th1) { $wi_hinweis .= ' ' . $wi_th1; }
     } else {
         $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e(wi_ansage_datei()));
     }
@@ -1105,9 +1140,12 @@ $wi_ans = wi_ansage_lesen(); ?>
 <div class="sm-small"><?= wi_e(sprintf(wi_t('SPRACHAUSGABE.L_AUSFALL_HINT'), (int) (wi_ansage_ausfall_grenze() / 60))) ?></div>
 <?= ansage_formular_html($wi_ans['tts'], array(
     'w' => function ($n, $g) { return wi_fw('ansage', $n, $g); },
-    'm' => function ($n) { return wi_fm($n); },
+    'm' => function ($n) { return wi_fm(wi_ziele_x2_name($n)); },     // 3.1.13: Tabelle name[N] -> name.N
     'c' => function ($n, $g) { return wi_fh('ansage', $n, $g); },
-    'modi' => wi_ansage_modi()), wi_ansage_k()) ?>
+    'modi' => wi_ansage_modi(),
+    /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
+    'ziele' => wi_mit_zielen(),
+    'ziele_post' => wi_fa('ansage') ? wi_ziele_x2_post($wi_eingaben['werte']) : null), wi_ansage_k()); ?>
 <div class="sm-small"><?= wi_e(wi_t('SPRACHAUSGABE.TEST_HINWEIS')) ?></div>
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save_ansage" value="1"><?= wi_e(wi_t('SPRACHAUSGABE.SPEICHERN')) ?></button>
 </form>
@@ -1480,9 +1518,9 @@ $wi_ntabelle = function ($zeilen) { ?>
 <div class="sm-small"><?= sprintf(wi_t('LOXONE.S3_V2'), '<span class="sm-mono">' . wi_e($wi_pre) . '</span>') ?></div>
 <div class="sm-breit">
 <table class="sm-tbl">
-<tr><th style="width:32px;">#</th><th><?= wi_t('LOXONE.TH_THEMA') ?></th><th><?= wi_t('LOXONE.TH_NAME') ?></th><th><?= wi_t('LOXONE.TH_MUSTER') ?></th></tr>
+<tr><th style="width:32px;">#</th><th><?= wi_t('LOXONE.TH_THEMA') ?></th><th><?= wi_t('LOXONE.TH_NAME') ?></th><th><?= wi_t('LOXONE.TH_MUSTER') ?></th><th><?= wi_t('LOXONE.TH_NONCACHED') ?></th></tr>
 <?php foreach ($wi_nhaken as $wi_i => $wi_nz) { ?>
-<tr><td><?= (int) $wi_i + 1 ?></td><td><span class="sm-mono"><?= wi_e($wi_nz['thema']) ?></span></td><td><span class="sm-mono"><?= wi_e($wi_nz['name']) ?></span></td><td><?= $wi_nz['muster'] ? wi_t('MQTT.JA') : wi_t('MQTT.NEIN') ?></td></tr>
+<tr><td><?= (int) $wi_i + 1 ?></td><td><span class="sm-mono"><?= wi_e($wi_nz['thema']) ?></span></td><td><span class="sm-mono"><?= wi_e($wi_nz['name']) ?></span></td><td><?= $wi_nz['muster'] ? wi_t('MQTT.JA') : wi_t('MQTT.NEIN') ?></td><td><?= !empty($wi_nz['noncached']) ? wi_t('MQTT.JA') : wi_t('MQTT.NEIN') ?></td></tr>
 <?php } ?>
 </table>
 </div>
@@ -2031,7 +2069,11 @@ foreach ($wi_ids as $wi_id2) {
 <div class="sm-knopfreihe">
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="restart"><?= wi_t('TEST.RESTART') ?></button></form>
 <form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="stop"><?= wi_t('TEST.STOP') ?></button></form>
-<form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="ansage_test"><?= wi_e(wi_t('SPRACHAUSGABE.K_TEST')) ?></button></form>
+<form method="post" action="index.php"><input data-role="none" type="hidden" name="activetab" value="tab-test"><?= wi_fmt() ?><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="test" value="ansage_test"><?= wi_e(wi_t('SPRACHAUSGABE.K_TEST')) ?></button>
+<?php /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): je weiteres Ziel ein Knopf "Testansage an Ziel n (Geraet (Plugin))";
+   ohne weitere Ziele nichts. */
+if (wi_mit_zielen()) { echo ansage_testknoepfe_html(wi_tts(), wi_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
+</form>
 </div>
 
 <?php if ($wi_test_titel !== '' && $wi_tab === 'tab-test') { ?>

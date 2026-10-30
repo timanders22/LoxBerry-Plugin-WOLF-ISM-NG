@@ -365,6 +365,10 @@ function wi_pruefzeilen($cfg)
     }
     list($wi_ns, $wi_nt) = wi_mqtt_namen_probe($cfg);
     $z[] = array($wi_ns, wi_t('PZ.NAMEN'), $wi_nt);
+    // Nachtwelle N6 (3.1.13): stehen unter MQTT-Gateway V2 die Haken der Hakenliste mit dem richtigen Noncached?
+    // Liest config/system/subscriptions.json; unter V1 und bei ausgeschaltetem MQTT grau.
+    list($wi_v2s, $wi_v2t) = wi_v2_haken_lage($cfg);
+    $z[] = array($wi_v2s === 2 ? -1 : $wi_v2s, wi_t('PZ.V2_HAKEN'), $wi_v2t);
     list($wi_ps, $wi_pt) = wi_plausibel_pruefen();
     $z[] = array($wi_ps === null ? -1 : ($wi_ps ? 1 : 0), wi_t('PZ.PLAUS'), $wi_pt);
     $wi_apre = wi_cfg($cfg, 'praefix', 'wolf_ng');
