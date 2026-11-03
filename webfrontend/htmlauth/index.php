@@ -329,9 +329,9 @@ if ($wi_post && isset($_POST['laden'])) {
             }
             /* Nr. 36 b (seit 3.1.8): die Sprachausgabe aus der Sicherung. Fehlt sie (Sicherung
              * vor 3.1.8), gelten ihre Vorgaben - wie fuer jeden anderen fehlenden Schluessel. Die
-             * Sprechtoken traegt keine Sicherung: die geltenden bleiben. */
+             * Sprechtoken traegt keine Sicherung: die geltenden bleiben. 3.1.14: Was die Datei nicht traegt, bleibt, wie es gilt (die Vorgaben waeren jetzt EIN, ein bewusstes AUS ginge verloren). */
             $wi_ajetzt = wi_ansage_lesen();
-            $wi_aneu = wi_ansage_vorgaben();
+            $wi_aneu = $wi_ajetzt;
             foreach ((array) $wi_ans_s as $wi_ak => $wi_aw) {
                 $wi_aneu[$wi_ak] = $wi_aw;
             }
@@ -471,9 +471,9 @@ if ($wi_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel'
     if (isset($_POST['ansage_test_ziel']) && $wi_tnur === 0) {
         $wi_tr = array('stand' => 0, 'kennung' => 'ZIEL_UNBEKANNT|-', 'art' => '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
     } elseif ($wi_tnur >= 1) {
-        $wi_tr = ansage_testansage(wi_tts(), $wi_tk, $wi_tnur);
+        $wi_tr = ansage_testansage(wi_ansage_vor_ort(), $wi_tk, $wi_tnur);
     } else {
-        $wi_tr = ansage_testansage(wi_tts(), $wi_tk);
+        $wi_tr = ansage_testansage(wi_ansage_vor_ort(), $wi_tk);
     }
     wi_log('Testansage' . ($wi_tnur >= 1 ? ' an Ziel ' . $wi_tnur : '') . ': ' . ansage_kurz($wi_tr));
     if ($wi_tr['stand'] === 1) {
@@ -736,7 +736,8 @@ if ($wi_post && isset($_POST['save_ansage'])) {
     $wi_an = $wi_av;
     $wi_an['tts'] = ansage_formular_lesen($_POST, $wi_av['tts'], $wi_tmangel, $wi_tbean,
                                           wi_ansage_opt() + array(
-                                          'ziele' => wi_mit_zielen()), wi_ansage_k(), $wi_thinw);
+                                          'ziele' => wi_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), wi_ansage_k(), $wi_thinw);
+    list($wi_an['ansage_regeln']) = ansage_regeln_formular($_POST, wi_ansage_regeln($wi_av), array(), $wi_tmangel, $wi_tbean, wi_ansage_k());     // S2: Wann gesprochen wird (Stamm)
     foreach (wi_ansage_anlaesse() as $wi_n) {
         $wi_an[$wi_n] = isset($_POST['ansage_' . $wi_n]) ? '1' : '0';
     }
@@ -745,7 +746,8 @@ if ($wi_post && isset($_POST['save_ansage'])) {
     }
     if ($wi_beanstandungen) {
         $wi_x2w = array();
-        $wi_x2h = array('ansage_stoerung', 'ansage_ausfall');
+        $wi_x2h = array('ansage_stoerung', 'ansage_ausfall', 'ansage_ruhe_ein');
+        foreach (array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min') as $wi_f) { $wi_x2w[] = $wi_f; }
         foreach (ansage_x2_felder(wi_ansage_opt()) as $wi_f) {
             if (substr($wi_f, -9) === '_loeschen') {
                 $wi_x2h[] = $wi_f;
@@ -1146,6 +1148,11 @@ $wi_ans = wi_ansage_lesen(); ?>
     /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): Tabelle der weiteren Ausgabeziele; nach einer Beanstandung traegt sie das Eingetippte. */
     'ziele' => wi_mit_zielen(),
     'ziele_post' => wi_fa('ansage') ? wi_ziele_x2_post($wi_eingaben['werte']) : null), wi_ansage_k()); ?>
+<?= ansage_regeln_html(wi_ansage_regeln(wi_ansage_lesen()), array(), array(), array(
+    'w' => function ($n, $g) { return wi_fw('ansage', $n, $g); },
+    'm' => function ($n) { return wi_fm(wi_ziele_x2_name($n)); },
+    'c' => function ($n, $g) { return wi_fh('ansage', $n, $g); },
+    'token_vor_ort' => true), wi_ansage_k()) ?>
 <div class="sm-small"><?= wi_e(wi_t('SPRACHAUSGABE.TEST_HINWEIS')) ?></div>
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save_ansage" value="1"><?= wi_e(wi_t('SPRACHAUSGABE.SPEICHERN')) ?></button>
 </form>
@@ -2074,6 +2081,7 @@ foreach ($wi_ids as $wi_id2) {
    ohne weitere Ziele nichts. */
 if (wi_mit_zielen()) { echo ansage_testknoepfe_html(wi_tts(), wi_ansage_k(), array('klasse' => 'sm-btn sm-b-aktion')); } ?>
 </form>
+<?= wi_ansage_lage_html() ?>
 </div>
 
 <?php if ($wi_test_titel !== '' && $wi_tab === 'tab-test') { ?>

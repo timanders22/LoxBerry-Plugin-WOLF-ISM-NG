@@ -649,7 +649,7 @@ function wi_test_ausfuehren($was)
         case 'ansage_test':
             /* Nr. 36 b (seit 3.1.8): die Testansage. Ins Protokoll nur die Kurzform. */
             $ak = wi_ansage_k();
-            $r = ansage_testansage(wi_tts(), $ak);
+            $r = ansage_testansage(wi_ansage_vor_ort(), $ak);
             wi_ansage_log($r['stand'] === 0 ? 'WARNING' : 'INFO', 'Testansage: ' . ansage_kurz($r));
             if ($r['stand'] === 1) {
                 $t = wi_t('SPRACHAUSGABE.TEST_OK');

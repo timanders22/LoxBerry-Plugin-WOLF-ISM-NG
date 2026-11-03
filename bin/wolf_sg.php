@@ -252,37 +252,38 @@ if ($wi_modus === '--zuruecknehmen') {
 /* ==================================================================
  * Regelbetrieb
  * ================================================================== */
-$cfg = wi_config_read();
+/* bis 3.1.13 hiess dieses Feld $cfg: das LoxBerry-SDK ueberschreibt ein globales $cfg beim ersten Lesen von general.json (Ausfall MGiSmart 01.11.2026). */
+$wi_lauf_cfg = wi_config_read();
 $ernst = ($wi_modus === '--einmal');
 
 /* Gruppe 5 / MQTT (3.1.12, Entwurf wo E11): das Gateway-Abo (config/plugins/<ordner>/mqtt_subscriptions.cfg)
  * dem Praefix nachfuehren - alle fuenf Minuten, vor jedem Ausstieg des SG-Moduls. Ein Update spielt die
  * Konfiguration zurueck, die Abo-Datei kommt aber aus dem Paket (wolf_ng/#). */
-if ($ernst && wi_cfg($cfg, 'mqtt', '1') === '1') {
-    wi_abo_datei(wi_cfg($cfg, 'praefix', 'wolf_ng'), true);
+if ($ernst && wi_cfg($wi_lauf_cfg, 'mqtt', '1') === '1') {
+    wi_abo_datei(wi_cfg($wi_lauf_cfg, 'praefix', 'wolf_ng'), true);
 }
 
 /* C2 (Durchgang 02.10.2026): ist das Schreiben aus (sg_ein oder sg_senden
  * auf 0) und traegt der Merker noch einen Zwang, wird er EINMAL
  * zurueckgenommen. Schlaegt das fehl (Dienst oder ISM8 fehlt), versucht es
  * der naechste Lauf wieder. Nur im Ernstlauf - der Trockenlauf sendet nie. */
-if ($ernst && (wi_cfg($cfg, 'sg_ein', '0') !== '1' || wi_cfg($cfg, 'sg_senden', '0') !== '1')) {
+if ($ernst && (wi_cfg($wi_lauf_cfg, 'sg_ein', '0') !== '1' || wi_cfg($wi_lauf_cfg, 'sg_senden', '0') !== '1')) {
     $wi_m0 = wi_sg_merker();
     if ($wi_m0 !== null && in_array((string) $wi_m0['lage'], array('laden', 'dimmen'), true)) {
-        list($wi_rc0, $wi_meld0) = wi_sg_zuruecknehmen($cfg);
+        list($wi_rc0, $wi_meld0) = wi_sg_zuruecknehmen($wi_lauf_cfg);
         foreach ($wi_meld0 as $wi_m) {
             wi_log_sg($wi_m[0], $wi_m[1]);
         }
     }
 }
 
-if (wi_cfg($cfg, 'sg_ein', '0') !== '1') {
+if (wi_cfg($wi_lauf_cfg, 'sg_ein', '0') !== '1') {
     // Ausgeschaltet heisst: nichts rechnen, nichts senden, nichts sagen.
     // Ein Cron, der alle fuenf Minuten eine Zeile schreibt, erzeugt 288
     // Zeilen am Tag auf einer Ramdisk.
     // C2: nur EINMAL nach dem Ausschalten laden 0, dimmen 0, lage aus.
     if ($ernst) {
-        $wi_n = wi_sg_mqtt_aus($cfg, false);
+        $wi_n = wi_sg_mqtt_aus($wi_lauf_cfg, false);
         if ($wi_n) {
             wi_log_sg('MQTT_AUS', array($wi_n));
         }
@@ -294,9 +295,9 @@ if (wi_cfg($cfg, 'sg_ein', '0') !== '1') {
  * Seit dem Durchgang 02.10.2026 VOR dem Veroeffentlichen: sg/lage meldet
  * den Merker, also das, was an der Heizung gilt (C2, Entscheidung 31) - und
  * der steht erst nach dem Stellen fest. */
-list($n, $uebersprungen, $meld) = wi_sg_stellen($cfg, $ernst);
+list($n, $uebersprungen, $meld) = wi_sg_stellen($wi_lauf_cfg, $ernst);
 
-$lage = wi_sg_lage($cfg);
+$lage = wi_sg_lage($wi_lauf_cfg);
 
 /* --- Veroeffentlichen ------------------------------------------------
  *
@@ -315,7 +316,7 @@ $lage = wi_sg_lage($cfg);
 $port = wi_mqtt_udpinport();
 $pre = wi_praefix();
 $gesendet_mqtt = 0;
-if ($port && wi_cfg($cfg, 'mqtt', '0') === '1') {
+if ($port && wi_cfg($wi_lauf_cfg, 'mqtt', '0') === '1') {
     // C2: sg/lage aus dem Merker. Ohne Merker wurde nie etwas gestellt -
     // an der Heizung gilt dann, was dort eingestellt ist: normal.
     $wi_gilt = (is_array($lage['merker']) && isset($lage['merker']['lage']))

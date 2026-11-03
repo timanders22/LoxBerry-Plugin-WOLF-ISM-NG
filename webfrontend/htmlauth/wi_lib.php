@@ -1143,6 +1143,7 @@ function wi_konfig_text($cfg)
     $t .= "# Sprachausgabe ohne Sprechtoken (Alexa-NG, Chromecast 4 Lox NG)\n";
     $t .= 'tts ' . json_encode(ansage_sicherung_bereinigen($a['tts']),
                                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+    $t .= 'ansage_regeln ' . json_encode(wi_ansage_regeln($a), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";     // 3.1.14: ohne Sprechtoken, ohne Vermerk
     return $t;
 }
 
@@ -1291,6 +1292,13 @@ function wi_konfig_einlesen($roh)
             $tts_roh = isset($wi_mt[1]) ? $wi_mt[1] : '';
             continue;
         }
+        if (preg_match('/^ansage_regeln(?:\s+(.*))?$/i', $t, $wi_mt)) {     // 3.1.14
+            $wi_rg = '';
+            $wi_rw = ansage_regeln_wert(json_decode(isset($wi_mt[1]) ? $wi_mt[1] : '', true), $wi_rg);
+            if ($wi_rw === null) { $mangel[] = sprintf(wi_t('MELDUNG.SICH_WERT'), 'ansage_regeln', '-'); } else { $ans['ansage_regeln'] = $wi_rw; }
+            continue;
+        }
+        if (preg_match('/^ansage_token_herkunft\b/i', $t)) { continue; }     // 3.1.14: nie aus einer Datei
         $f = preg_split('/\s+/', $t);
         // Eine Zeile mit NUR einem Schluessel ist ein LEERER Wert, keine
         // Beanstandung. Bis 3.0.10 fiel sie durch die Feldzahlpruefung - und
@@ -1751,7 +1759,10 @@ function wi_mqtt_sitzung(array $filter, array $senden = array())
     };
     $lies = function ($n) use ($s) {
         $d = '';
+        /* bis 3.1.13 ohne Frist: ein Broker, der ein Paket ankuendigt und nur tropfenweise liefert, hielt den Leser fest. Schweigt er ganz, greift schon stream_set_timeout(). */
+        $lies_bis = microtime(true) + 5.0;
         while (strlen($d) < $n) {
+            if (microtime(true) >= $lies_bis) { return null; }
             $t = @fread($s, $n - strlen($d));
             if ($t === false || $t === '') {
                 $meta = stream_get_meta_data($s);
@@ -2796,10 +2807,10 @@ function wi_ansage_anlaesse()
     return array('stoerung', 'ausfall');
 }
 
-/** Vorgaben: Ausgabe aus, beide Haken an. */
+/** Vorgaben: Ausgabe ab Werk EIN (3.1.14, nie gesetzt), beide Haken an. */
 function wi_ansage_vorgaben()
 {
-    return array('tts' => ansage_vorgaben('aus'), 'stoerung' => '1', 'ausfall' => '1');
+    return array('tts' => ansage_werk_block(), 'stoerung' => '1', 'ausfall' => '1', 'ansage_regeln' => array(), 'ansage_token_herkunft' => array());
 }
 
 function wi_ansage_datei()
@@ -2831,8 +2842,11 @@ function wi_ansage_lesen()
     if (!is_array($d)) {
         $d = array();
     }
-    list($tts) = ansage_vervollstaendigen(isset($d['tts']) && is_array($d['tts']) ? $d['tts'] : array(), 'aus');
+    /* 3.1.14: ein nie gespeicherter Block = ab Werk EIN; ein gespeicherter bleibt, auch 'aus'. */
+    list($tts) = ansage_vervollstaendigen(isset($d['tts']) && is_array($d['tts']) ? $d['tts'] : $v['tts'], 'aus');
     $a = array('tts' => $tts);
+    $a['ansage_regeln'] = (isset($d['ansage_regeln']) && is_array($d['ansage_regeln'])) ? $d['ansage_regeln'] : array();
+    $a['ansage_token_herkunft'] = (isset($d['ansage_token_herkunft']) && is_array($d['ansage_token_herkunft'])) ? $d['ansage_token_herkunft'] : array();
     foreach (wi_ansage_anlaesse() as $n) {
         $a[$n] = (isset($d[$n]) && is_scalar($d[$n])) ? (string) $d[$n] : $v[$n];
     }
@@ -2842,7 +2856,7 @@ function wi_ansage_lesen()
 /** Schreiben: unteilbar, 0600 (die Datei traegt die Sprechtoken). */
 function wi_ansage_schreiben($a)
 {
-    $aus = array('tts' => $a['tts']);
+    $aus = array('tts' => $a['tts'], 'ansage_regeln' => isset($a['ansage_regeln']) ? $a['ansage_regeln'] : array(), 'ansage_token_herkunft' => isset($a['ansage_token_herkunft']) ? $a['ansage_token_herkunft'] : array());
     foreach (wi_ansage_anlaesse() as $n) {
         $aus[$n] = (string) $a[$n];
     }
@@ -2850,6 +2864,195 @@ function wi_ansage_schreiben($a)
 }
 
 /** Der Block tts, vervollstaendigt. */
+/** Der Datenordner der Sprachansagen. */
+function wi_ansage_ordner()
+{
+    $p = wi_paths();
+    return $p['home'] !== '' ? $p['home'] . '/data/plugins/' . $p['plugin'] : '';
+}
+
+/** Eine Protokollzeile der Sprachansagen. */
+function wi_ansage_zeile($t)
+{
+    wi_ansage_log('INFO', $t);
+}
+
+/** Der Block tts aus dem gelesenen Stand. */
+function wi_ansage_tts($a)
+{
+    return (is_array($a) && isset($a['tts']) && is_array($a['tts'])) ? ansage_block_oder_aus($a['tts'], wi_ansage_modi()) : wi_tts();
+}
+
+/* ---------------- Sprachansagen: Regeln aus dem Stamm (3.1.14, Welle S2, Stamm sprachausgabe.php 1.3.2) ----------------
+ *
+ * Nachtruhe, Sperre und Schalter "Ansagen aus" stehen im Stamm. Ab Werk EIN: ansage_werk_block() in den Vorgaben, also nur fuer einen
+ * nie gespeicherten Block; ein gespeicherter bleibt, auch 'aus'. Ein Minutenlauf und ein Dienst sprechen nie selbst: Sie legen den Anlass
+ * in <Daten>/ansage_warte.json, ein abgekoppelter Sender (php -r, eigene Sperre) spricht und wartet auf die Lautsprecher.
+ */
+
+/** So alt darf ein wartender Anlass werden (nach einem Update oder Hang wird nichts Aufgestautes angesagt). */
+if (!defined('WI_ANSAGE_HOECHSTALTER')) { define('WI_ANSAGE_HOECHSTALTER', 600); }
+
+/** Die Regeln: gespeichert und gueltig, sonst aus einer alten Einstellung dieser Linie, sonst die Vorgabe (mit Nachtruhe). */
+function wi_ansage_regeln($cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    $g = '';
+    if (!empty($cfg['ansage_regeln'])) {
+        $r = ansage_regeln_wert($cfg['ansage_regeln'], $g);
+        return $r === null ? ansage_regeln_vorgaben() : $r;
+    }
+    $r = ansage_regeln_vorgaben();
+    $p = ansage_regeln_wert($r, $g);
+    return $p === null ? ansage_regeln_vorgaben() : $p;
+}
+
+/** Die Warteliste unter einer Dateisperre aendern: $fn(Liste) -> array(neue Liste, Ergebnis). */
+function wi_ansage_warte($fn)
+{
+    $d = wi_ansage_ordner();
+    if (!is_dir($d)) { @mkdir($d, 0775, true); }
+    $f = $d . '/ansage_warte.json';
+    $h = @fopen($f, 'c+');
+    if ($h === false) { return null; }
+    if (!flock($h, LOCK_EX)) { fclose($h); return null; }
+    $alt = json_decode((string) stream_get_contents($h), true);
+    list($neu, $erg) = call_user_func($fn, is_array($alt) ? $alt : array());
+    rewind($h);
+    ftruncate($h, 0);
+    fwrite($h, (string) json_encode($neu));
+    fflush($h);
+    flock($h, LOCK_UN);
+    fclose($h);
+    @chmod($f, 0600);
+    return $erg;
+}
+
+/**
+ * Anlaesse hinlegen und den Sender starten; wartet auf nichts. $l: Eintraege fuer ansage_regel_sprechen() (schluessel, text, dringend,
+ * sperre_min, nur_nach). Die Schale schliesst vor dem exec jede Deskriptor-Nummer ueber 2, sonst erbte der Sender die Sperren des Rufers.
+ */
+function wi_ansage_legen(array $l, $jetzt = null)
+{
+    if (!$l) { return 'nichts'; }
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    wi_ansage_warte(function ($alt) use ($l, $jetzt) {
+        foreach ($l as $e) { $alt[] = $e + array('zeit' => $jetzt); }
+        return array(array_slice($alt, -50), null);
+    });
+    $php = (defined('PHP_BINARY') && PHP_BINARY !== '' && is_executable(PHP_BINARY) && stripos(basename(PHP_BINARY), 'php') === 0 && stripos(basename(PHP_BINARY), 'fpm') === false) ? PHP_BINARY : 'php';
+    $befehl = 'for f in /proc/$$/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] 2>/dev/null && eval "exec $n>&-"; done; '
+            . 'exec ' . escapeshellarg($php) . ' -r ' . escapeshellarg('chdir(dirname($argv[1])); $_SERVER["SCRIPT_FILENAME"] = $_SERVER["PHP_SELF"] = $argv[1]; require $argv[1]; wi_ansage_senden();') . ' -- ' . escapeshellarg(__FILE__);
+    $aus = array();
+    $rc = 1;
+    @exec('bash -c ' . escapeshellarg($befehl) . ' </dev/null >/dev/null 2>&1 &', $aus, $rc);
+    return $rc === 0 ? 'gestartet' : 'kein_start';
+}
+
+/** Das Sprechtoken aus Alexa-NG und Chromecast4lox uebernehmen (Stamm 1.3.1). Schreibt NUR bei einer Aenderung, nennt nie das Token. */
+function wi_ansage_token_pflegen($cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    list($neu, $her2, $g) = ansage_token_abgleich(wi_ansage_tts($cfg), isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array(), wi_ansage_k());
+    if (!$g) { return false; }
+    $cfg = wi_ansage_lesen();
+    $cfg['tts'] = $neu;
+    $cfg['ansage_token_herkunft'] = $her2;
+    if (!wi_ansage_schreiben($cfg)) { return false; }
+    wi_ansage_zeile('Ansage: Sprechtoken uebernommen (' . implode(', ', $g) . ').');
+    return true;
+}
+
+/** Der Block fuer Testansage und Pruefzeile: uebernommene Token aufgeloest. Nur im Speicher. */
+function wi_ansage_vor_ort($cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    return ansage_token_fuer_lauf(wi_ansage_tts($cfg), isset($cfg['ansage_token_herkunft']) ? $cfg['ansage_token_herkunft'] : array(), wi_ansage_k());
+}
+
+/** Der Block fuer die Pruefzeile: nur die eingerichteten Ziele; ist keines eingerichtet, sagt die Zeile "aus" statt eines Kreuzes. */
+function wi_ansage_pruefblock($cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    $t = wi_ansage_tts($cfg);
+    if ($t['mode'] === 'aus') { return $t; }
+    list($b) = ansage_ziele_bereit(wi_ansage_vor_ort($cfg), wi_ansage_k());
+    if ($b === null) { $t['mode'] = 'aus'; return $t; }
+    return $b;
+}
+
+/** Die Lage im Reiter Test: Ziele, Nachtruhe, Schalter. Nur im geoeffneten Reiter (der Schalter fragt den Broker). */
+function wi_ansage_lage_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    $k = wi_ansage_k();
+    $o = array();
+    foreach (ansage_regel_lage(wi_ansage_tts($cfg), wi_ansage_regeln($cfg), $k, true) as $z) {
+        $o[] = '<div class="sm-hilfe">' . htmlspecialchars((string) $z[1], ENT_QUOTES, 'UTF-8') . '</div>';
+    }
+    return implode("\n", $o) . "\n";
+}
+
+/** Die Felder der Regeln fuer die Einmalmeldung (X-2). */
+function wi_ansage_regel_felder(array $anlaesse = array())
+{
+    return ansage_regeln_x2_felder($anlaesse);
+}
+
+/**
+ * Im Vorgang sprechen, wo der Rufer das Ergebnis braucht (Antwort an Loxone, Befehl): Regeln aus dem Stamm mit "dringend, ohne Sperre" - es zaehlt nur der Schalter.
+ * Schalter gesetzt: stand -1, Kennung SCHALTER. Nichts bereit oder Original-Audioserver: wie bisher ansage_sprechen(), damit die Antwort sagt, was fehlt.
+ */
+function wi_ansage_direkt($text, array $e = array(), $tts = null)
+{
+    $conf = wi_ansage_lesen();
+    $k = wi_ansage_k();
+    $t = $tts === null ? wi_ansage_tts($conf) : $tts;
+    $a = ansage_regel_sprechen(array($e + array('schluessel' => 'direkt', 'text' => (string) $text, 'dringend' => true, 'sperre_min' => 0)), $t, wi_ansage_regeln($conf), $k);
+    if ($a['r'] !== null) { return $a['r']; }
+    if ($a['regel'] === 'SCHALTER') {
+        return array('stand' => -1, 'kennung' => 'SCHALTER', 'art' => isset($t['mode']) ? (string) $t['mode'] : '-', 'http' => 0, 'zeile' => '', 'zeichen' => 0);
+    }
+    return ansage_sprechen((string) $text, $t, $k);
+}
+
+/**
+ * Der Sender: eigene Sperre, nimmt die Warteliste und spricht nach den Regeln. "aus" und "kein Ziel eingerichtet" hinterlassen keine Zeile;
+ * ein gescheitertes Ziel genau eine je Aenderung (ab Werk EIN darf kein Protokoll vollaufen). Text und Token stehen nie im Protokoll.
+ */
+function wi_ansage_senden($jetzt = null)
+{
+    $d = wi_ansage_ordner();
+    if (!is_dir($d)) { @mkdir($d, 0775, true); }
+    $fh = @fopen($d . '/ansage_senden.lock', 'c');
+    if ($fh === false || !flock($fh, LOCK_EX | LOCK_NB)) { return 'laeuft'; }
+    $erg = 'nichts';
+    $l = wi_ansage_warte(function ($alt) { return array(array(), $alt); });
+    $jetzt = $jetzt === null ? time() : (int) $jetzt;
+    $frisch = array();
+    foreach (is_array($l) ? $l : array() as $e) {
+        if (is_array($e) && isset($e['zeit']) && $jetzt - (int) $e['zeit'] <= WI_ANSAGE_HOECHSTALTER) { $frisch[] = $e; }
+    }
+    if ($frisch) {
+        $conf = wi_ansage_lesen();
+        wi_ansage_token_pflegen($conf);
+        $conf = wi_ansage_lesen();
+        $a = ansage_regel_sprechen($frisch, wi_ansage_tts($conf), wi_ansage_regeln($conf), wi_ansage_k());
+        $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
+        if ($a['r'] !== null) {
+            $merk = $d . '/ansage_lage.txt';
+            $lage = $a['r']['stand'] === 1 ? 'gesprochen' : ansage_kurz($a['r']);
+            if ($a['r']['stand'] === 1 || (string) @file_get_contents($merk) !== $lage) { wi_ansage_zeile('Ansage: ' . ansage_regel_kurz($a)); }
+            @file_put_contents($merk, $lage);
+        } elseif ($a['regel'] !== 'AUS' && $a['regel'] !== 'KEIN_ZIEL') {
+            wi_ansage_zeile('Ansage entfaellt: ' . ansage_regel_kurz($a));
+        }
+    }
+    flock($fh, LOCK_UN);
+    fclose($fh);
+    return $erg;
+}
+
 function wi_tts()
 {
     $a = wi_ansage_lesen();
@@ -2869,6 +3072,7 @@ function wi_ansage_k()
     $p = wi_paths();
     $d = $p['home'] !== '' ? $p['home'] . '/data/plugins/' . $p['plugin'] : '';
     return array(
+        'werk' => ansage_werk_modus(),
         'port'   => ansage_webport(wi_general_json()),
         /* seit Modul 1.1.0: https-Port (Umleitung an 127.0.0.1) und Wurzel fuer die Plugin-Datenbank
          * (Ordnername von Alexa-NG/Chromecast); '' = keine Datenbank, feste Ordnernamen. */
@@ -3085,14 +3289,20 @@ function wi_ansage_takt($jetzt = null)
         }
     }
 
+    /* 3.1.14: Sperre, Nachtruhe und Schalter stehen im Stamm, gesprochen wird in einem eigenen Vorgang. Die Stoerung der Heizung spricht auch nachts, der Ausfall nicht. */
     $zeilen = array();
     $an = wi_ansage_an();
+    $legen = array();
     foreach ($sagen as $anlass => $text) {
         if (!$an || $a[$anlass] !== '1') {
             continue;
         }
-        $r = ansage_sprechen($text, $a['tts'], wi_ansage_k());
-        $zeilen[] = array($r['stand'] === 0 ? 'WARNING' : 'INFO', $anlass . ': ' . ansage_kurz($r));
+        $legen[] = array('schluessel' => $anlass, 'text' => $text, 'dringend' => $anlass === 'stoerung');
+        $zeilen[] = array('INFO', $anlass . ': hingelegt');
+    }
+    if ($legen) {
+        wi_ansage_token_pflegen($a);
+        wi_ansage_legen($legen, $jetzt);
     }
     return $zeilen;
 }
