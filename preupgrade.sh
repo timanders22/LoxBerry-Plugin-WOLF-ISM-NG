@@ -56,19 +56,49 @@ PTEMPPATH=$6  # Sixth argument is full temp path during install (see also $1)
 # Wurzel wird gewarnt, nichts angelegt und nichts gesichert.
 WI_BASE="${5:-$LBHOMEDIR}"
 WI_PDIR="${3:-wolf_ng}"
+# 05.11.2026: ein Ordnername mit "/" oder "." waere ein Pfad hinaus (dieselbe Formel wie MGiSmart und Govee).
+case "$WI_PDIR" in
+    ''|.|..|*/*) echo "<FAIL> Unbrauchbarer Ordnername '$WI_PDIR' - nichts angefasst."; exit 2 ;;
+esac
 if [ -z "$WI_BASE" ] || [ ! -d "$WI_BASE/config/plugins" ] || [ ! -d "$WI_BASE/data/plugins" ]; then
     echo "<WARNING> Die LoxBerry-Wurzel ('$WI_BASE') traegt kein config/plugins und"
     echo "<WARNING> data/plugins - es wurde nichts gesperrt und nichts gesichert."
-    exit 1
+    exit 2
 fi
 WI_MARKE="$WI_BASE/data/plugins/$WI_PDIR.upgrade_laeuft"
 date +%s > "$WI_MARKE" 2>/dev/null
 if [ -s "$WI_MARKE" ]; then
     echo "<OK> Dienststart bis zum Ende der Installation gesperrt."
 else
-    echo "<WARNING> Die Marke $WI_MARKE liess sich nicht anlegen - der"
-    echo "<WARNING> Waechter kann den Dienst waehrend der Installation starten."
+    # 05.11.2026: ohne Marke haelt die Installation das Update fuer eine Neuinstallation und legt die Einstellungen beiseite; bis hierher nur eine Warnung.
+    rm -f "$WI_MARKE" 2>/dev/null
+    echo "<FAIL> Die Marke $WI_MARKE liess sich nicht anlegen - die Aktualisierung wird abgebrochen,"
+    echo "<FAIL> die bisherige Fassung bleibt unveraendert installiert."
+    exit 2
 fi
+# ---------- Update-Schutz (05.11.2026, Bauart Govee 0.9.34) ----------
+# plugininstall.pl bricht nur bei Rueckgabewert >1 vor purge_installation ab. Die Kopie entsteht als <Ziel>.neu.<pid>, traegt 0600,
+# BEVOR Inhalt hineinkommt, wird mit cmp verglichen und erst dann per mv an ihren Platz gestellt: eine heile Sicherung bleibt heil.
+ZS_FEHL=""
+zs_hinlegen() {   # $1 Quelle, $2 Ziel
+    [ -d "$2" ] && return 1
+    zs_neu="$2.neu.$$"
+    rm -f "$zs_neu" 2>/dev/null
+    if { : > "$zs_neu"; } 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
+       && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && mv -f "$zs_neu" "$2" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$zs_neu" 2>/dev/null
+    return 1
+}
+zs_schluss() {   # Fehlschlag gesammelt: Marke weg, Abbruch vor purge_installation
+    [ -n "$ZS_FEHL" ] || return 0
+    echo "<FAIL> Nicht gesichert:$ZS_FEHL - die Aktualisierung wird abgebrochen, damit der Purge die Originale nicht loescht."
+    echo "<FAIL> Die bisherige Fassung bleibt installiert. Bitte Platz und Rechte unter config/plugins und data/plugins pruefen."
+    rm -f "$WI_MARKE" 2>/dev/null
+    exit 2
+}
 
 # Gruppe 5 / MQTT (3.1.12): die Befehlsbruecke anhalten. Die Marke liegt schon (oben) - der Waechter im Minutentakt
 # (cron.01min) startet sie bis postupgrade.sh nicht neu; es ist dieselbe Marke, die befehlsbruecke.sh liest. Bis
@@ -143,7 +173,10 @@ mkdir -p "$SICHERUNG"
 # fehlt das in der Umgebung, hiess es bis 3.1.4 "/<ordner>" (Muster 2).
 PCONFIG="$WI_BASE/config/plugins/$WI_PDIR"
 echo "<INFO> Backing up existing config files $PCONFIG/* -> $SICHERUNG/"
-cp -p -r "$PCONFIG/." "$SICHERUNG/" 2>/dev/null || true
+if ! { cp -p -r "$PCONFIG/." "$SICHERUNG/" 2>/dev/null && diff -rq "$PCONFIG" "$SICHERUNG" >/dev/null 2>&1; }; then
+    echo "<WARNING> Die Konfiguration liess sich nicht vollstaendig sichern ($SICHERUNG)."
+    ZS_FEHL="$ZS_FEHL Konfiguration"
+fi
 
 
 # ==== NETZ-EINSTELLUNGEN-UPDATE (automatisch eingefuegt, nicht doppeln) ====
@@ -165,12 +198,11 @@ NETZ_PDIR="$WI_PDIR"
 NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
 NETZ_ZWEIT="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_ism8i.conf"
 if wi_hat_inhalt "$NETZ_CFG/wolf_ism8i.conf"; then
-    if cp -p "$NETZ_CFG/wolf_ism8i.conf" "$NETZ_ZWEIT" 2>/dev/null \
-       && chmod 0600 "$NETZ_ZWEIT" 2>/dev/null \
-       && cmp -s "$NETZ_CFG/wolf_ism8i.conf" "$NETZ_ZWEIT"; then
+    if zs_hinlegen "$NETZ_CFG/wolf_ism8i.conf" "$NETZ_ZWEIT"; then
         echo "<INFO> Zweitschrift der Einstellungen angelegt."
     else
         echo "<WARNING> Die Zweitschrift $NETZ_ZWEIT liess sich nicht anlegen."
+        ZS_FEHL="$ZS_FEHL wolf_ism8i.conf"
     fi
 else
     echo "<WARNING> $NETZ_CFG/wolf_ism8i.conf fehlt oder traegt keinen Inhalt -"
@@ -184,14 +216,15 @@ fi
 # frueheren Vorgang einspielen).
 WI_CSV_Z="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_stoercodes.csv"
 if [ -f "$NETZ_CFG/wolf_stoercodes.csv" ]; then
-    if cp -p "$NETZ_CFG/wolf_stoercodes.csv" "$WI_CSV_Z" 2>/dev/null \
-       && cmp -s "$NETZ_CFG/wolf_stoercodes.csv" "$WI_CSV_Z"; then
+    if zs_hinlegen "$NETZ_CFG/wolf_stoercodes.csv" "$WI_CSV_Z"; then
         echo "<INFO> Zweitschrift der eigenen Stoercodetabelle angelegt."
     else
         echo "<WARNING> Die Zweitschrift $WI_CSV_Z liess sich nicht anlegen."
+        ZS_FEHL="$ZS_FEHL wolf_stoercodes.csv"
     fi
 elif [ -f "$WI_CSV_Z" ]; then
     rm -f "$WI_CSV_Z" && echo "<INFO> Alte Zweitschrift der Stoercodetabelle entfernt - es gibt keine eigene Tabelle mehr."
 fi
 
+zs_schluss
 exit 0

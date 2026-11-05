@@ -10,6 +10,12 @@ Plugins dieses Hauses an den Loxone Music Server, MusicServer4Home, eine
 eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (seit 3.1.8, ab Werk
 aus; Adresse und Vorlage nur im Heimnetz, die Sprechtoken in keiner Sicherung).
 
+## Neu in 3.1.17
+
+- **Update:** Scheitert die Sicherung oder die Marke, bricht das Update ab und die bisherige Fassung bleibt.
+- **Sprechtoken:** Ein von Hand eingetragenes Alexa- oder Google-Token wird nicht mehr vom Token des Nachbar-Plugins überschrieben.
+- **Formular:** Tafel- und HomePod-Felder gehören jetzt zu den Feldern, die eine Beanstandung im Formular mitführt und markiert. Ein beanstandeter Tafel- oder HomePod-Name bleibt zur Korrektur im Feld stehen.
+
 ## Neu in 3.1.16
 
 - Vor einem Download wird jeder offene Ausgabepuffer geleert: PHP-Warnungen oder Reste landen nicht mehr in der heruntergeladenen Datei.

@@ -741,6 +741,8 @@ if ($wi_post && isset($_POST['save_ansage'])) {
                                           wi_ansage_opt() + array(
                                           'ziele' => wi_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), wi_ansage_k(), $wi_thinw);
     list($wi_an['ansage_regeln']) = ansage_regeln_formular($_POST, wi_ansage_regeln($wi_av), array(), $wi_tmangel, $wi_tbean, wi_ansage_k());     // S2: Wann gesprochen wird (Stamm)
+    // 3.1.17: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 3.1.16 ueberschrieb es der naechste Abgleich.
+    $wi_an['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST, isset($wi_av['ansage_token_herkunft']) ? $wi_av['ansage_token_herkunft'] : array());
     foreach (wi_ansage_anlaesse() as $wi_n) {
         $wi_an[$wi_n] = isset($_POST['ansage_' . $wi_n]) ? '1' : '0';
     }
@@ -749,8 +751,8 @@ if ($wi_post && isset($_POST['save_ansage'])) {
     }
     if ($wi_beanstandungen) {
         $wi_x2w = array();
-        $wi_x2h = array('ansage_stoerung', 'ansage_ausfall', 'ansage_ruhe_ein');
-        foreach (array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min') as $wi_f) { $wi_x2w[] = $wi_f; }
+        $wi_x2h = array('ansage_stoerung', 'ansage_ausfall', 'ansage_ruhe_ein', 'ansage_tafel_ein', 'ansage_homepod_ein');     // 3.1.17: Tafel und HomePod dazu
+        foreach (array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_tafel_namen', 'ansage_homepod_geraet') as $wi_f) { $wi_x2w[] = $wi_f; }
         foreach (ansage_x2_felder(wi_ansage_opt()) as $wi_f) {
             if (substr($wi_f, -9) === '_loeschen') {
                 $wi_x2h[] = $wi_f;
