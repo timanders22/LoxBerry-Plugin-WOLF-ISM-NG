@@ -249,6 +249,7 @@ if ($wi_post && isset($_POST['download'])) {
         } elseif (!wi_mqtt_udpinport()) {
             $wi_error = wi_t('MELDUNG.KEIN_UDPIN_VORLAGE');
         } else {
+            while (ob_get_level() > 0) { @ob_end_clean(); }
             header('Content-Type: application/x-download');
             header('Content-Disposition: attachment; filename="' . $wi_bv[0] . '"');
             header('Content-Length: ' . strlen($wi_bv[1]));
@@ -267,6 +268,7 @@ if ($wi_post && isset($_POST['download'])) {
         } elseif ($anzahl < 1) {
             $wi_error = wi_t('MELDUNG.LEERE_VORLAGE');
         } else {
+            while (ob_get_level() > 0) { @ob_end_clean(); }
             header('Content-Type: application/x-download');
             header('Content-Disposition: attachment; filename="' . $name . '"');
             header('Content-Length: ' . strlen($inhalt));
@@ -291,6 +293,7 @@ if ($wi_post && isset($_POST['sichern'])) {
         $txt = '# _warnung: Diese Einstellungen wuerden beim Zurueckspielen abgewiesen: '
              . implode(', ', $wi_swarn) . "\n" . $txt;
     }
+    while (ob_get_level() > 0) { @ob_end_clean(); }
     header('Content-Type: application/x-download');
     header('Content-Disposition: attachment; filename="wolf_ism8i_einstellungen.txt"');
     header('Content-Length: ' . strlen($txt));
