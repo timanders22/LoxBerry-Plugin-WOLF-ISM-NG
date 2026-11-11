@@ -10,6 +10,11 @@ Plugins dieses Hauses an den Loxone Music Server, MusicServer4Home, eine
 eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (seit 3.1.8, ab Werk
 aus; Adresse und Vorlage nur im Heimnetz, die Sprechtoken in keiner Sicherung).
 
+## Neu in 3.1.20
+
+- **Konfiguration wird vervollständigt:** Fehlen in `wolf_ism8i.conf` Einstellungen, die eine neuere Fassung mitbringt, trägt der Fünfminutentakt (`cron/cron.05min` über `bin/wi_vervollstaendigen.php`) sie jetzt einmal mit ihrer Vorgabe in die Datei ein. Das Protokoll des Dienstes nennt die ergänzten Namen in einer Zeile, nie die Werte. Bisher ergänzte das Plugin fehlende Einstellungen nur beim Lesen; in die Datei kamen sie erst beim nächsten Speichern im Formular. Eine Datei, die der Dienst selbst angelegt hat, trägt 15 der 33 Einstellungen; dort kommen 18 hinzu (Störcodetabelle, SG-Ready und Paragraph 14a, die beiden Haken der Befehlsbrücke), alle mit den Werten, die das Plugin bisher ohnehin angenommen hat. Am Verhalten ändert sich nichts.
+- Die vorhandenen Zeilen bleiben, wie sie sind: Kommentare, Groß- und Kleinschreibung, leere Werte, unbekannte Schlüssel und das Zeilenende. Die fehlenden Zeilen werden nur angehängt, geschrieben wird nur, wenn etwas fehlt. Angefasst wird nur eine Datei mit einer Zeile `enable 0` oder `enable 1`, nie während einer Aktualisierung und nie aus einem ausgepackten Archiv. Der Takt ruft das auch bei ausgeschaltetem Server auf, als Benutzer `loxberry`. Gemessen ist das im Prüfstand unter PHP 7.4 und 8.4 auf dem Arbeitsrechner, nicht am Gerät; die Linie ist dort nicht installiert. Nicht gemessen sind die Dateirechte nach dem Schreiben (unter Windows nicht messbar) und der Aufruf über `su loxberry`.
+
 ## Neu in 3.1.19
 
 - Gemeinsames Sprachmodul 1.4.3: Als LoxBerry-Wurzel aus `LBHOMEDIR` gilt für die Sprachausgabe nur noch ein Ordner mit `config/plugins`, `data/plugins` und `config/system/general.json`; bis 1.4.2 genügte `config/system`, und ein Prüfstand oder Rest mit diesem Ordner wurde wie ein LoxBerry gelesen. Auf einem LoxBerry ändert sich nichts.

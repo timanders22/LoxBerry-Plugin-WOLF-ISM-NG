@@ -519,6 +519,114 @@ function wi_config_write($cfg)
 }
 
 /**
+ * Fehlende Einstellungen EINMAL mit ihrer Vorgabe in wolf_ism8i.conf schreiben
+ * (seit 3.1.20; Regeln/05, Bauform Docker NG 1.3.7; Entscheidung des
+ * Hausherrn vom 11.11.2026).
+ *
+ * Bis 3.1.19 ergaenzte wi_config_read() fehlende Schluessel nur im Speicher;
+ * in die Datei kamen sie erst beim naechsten Speichern im Formular. Eine vom
+ * Dienst angelegte Datei (loadConfig() in bin/wolf_ism8i.pl) traegt 15 der
+ * Schluessel aus wi_defaults(); die uebrigen fehlten dort bis dahin.
+ * Aufgerufen von bin/wi_vervollstaendigen.php aus cron/cron.05min, nach der
+ * Frage nach der Marke einer Aktualisierung und vor dem ersten Lesen der
+ * Konfiguration.
+ *
+ *  - nur mit LoxBerry-Wurzel, nicht waehrend einer Aktualisierung (Marke);
+ *  - nur an einer Datei mit dem Merkwort dieser Linie, einer Zeile
+ *    "enable 0|1" (dieselbe Regel wie wi_hat_inhalt() in preupgrade.sh,
+ *    postinstall.sh und postupgrade.sh); eine fehlende, leere oder fremde
+ *    Datei wird nicht angefasst;
+ *  - geschrieben werden die ZEILEN DER DATEI, unveraendert (Kommentare,
+ *    Gross- und Kleinschreibung, leere Werte, fremde Schluessel), und dahinter
+ *    je fehlendem Schluessel aus wi_defaults() eine Zeile "schluessel vorgabe" -
+ *    kein Neubau ueber wi_config_write(), der fremde Zeilen verwerfen und leere
+ *    Werte durch die Vorgabe ersetzen wuerde. Das sind genau die Schluessel, die
+ *    das Speichern im Formular schreibt;
+ *  - eine Lese-Regel fuer Bestandsdateien hat wi_config_read() nicht: ein
+ *    fehlender Schluessel gilt dort als Vorgabe, also wird die Vorgabe
+ *    eingetragen, und wi_config_read() liefert danach dasselbe wie vorher.
+ *    Den Uebergang fuer mqtt_zustand_schreiben (1 bei einem Update von
+ *    3.1.11) schreibt weiterhin postupgrade.sh, vor diesem Aufruf;
+ *  - als vorhanden gilt ein Schluessel, sobald eine Zeile, die nicht mit einem
+ *    Doppelkreuz beginnt, mit ihm anfaengt (ohne Ruecksicht auf Gross- und
+ *    Kleinschreibung, wie wi_config_read() und loadConfig() lesen);
+ *  - Zeilenende der Datei bleibt, Weg wie wi_config_write(): Nebendatei mit
+ *    der Prozessnummer, Laengenvergleich, 0644, rename(); eine Zweitschrift
+ *    fuehrt diese Linie nicht;
+ *  - geschrieben wird nur, wenn etwas fehlt; dann eine Protokollzeile im
+ *    Protokoll des Dienstes mit den Namen, nie mit Werten.
+ *
+ * Rueckgabe: array('stand' => ohne_wurzel|upgrade|ohne_datei|ohne_merkwort|
+ *                  vollstaendig|ergaenzt|fehler, 'schluessel' => array(...))
+ */
+function wi_config_vervollstaendigen()
+{
+    $p = wi_paths();
+    if ($p['home'] === '') {
+        return array('stand' => 'ohne_wurzel', 'schluessel' => array());
+    }
+    if (wi_upgrade_laeuft()) {
+        return array('stand' => 'upgrade', 'schluessel' => array());
+    }
+    $file = $p['config'];
+    clearstatcache(true, $file);
+    if (!is_file($file) || !is_readable($file)) {
+        return array('stand' => 'ohne_datei', 'schluessel' => array());
+    }
+    $txt = @file_get_contents($file);
+    if (!is_string($txt) || preg_match('/^[ \t]*enable[ \t]+[01][ \t\r]*$/mi', $txt) !== 1) {
+        return array('stand' => 'ohne_merkwort', 'schluessel' => array());
+    }
+    $da = array();
+    foreach (preg_split('/\R/', $txt) as $zeile) {
+        $t = trim($zeile);
+        if ($t === '' || $t[0] === '#') {
+            continue;
+        }
+        $f = preg_split('/\s+/', $t);
+        $da[strtolower($f[0])] = true;
+    }
+    $fehlend = array();
+    foreach (wi_defaults() as $k => $vorgabe) {
+        if (!isset($da[$k])) {
+            $fehlend[$k] = (string) $vorgabe;
+        }
+    }
+    if (!$fehlend) {
+        return array('stand' => 'vollstaendig', 'schluessel' => array());
+    }
+    $eol = (strpos($txt, "\r\n") !== false) ? "\r\n" : "\n";
+    $neu = $txt;
+    if ($neu !== '' && substr($neu, -1) !== "\n") {
+        $neu .= $eol;
+    }
+    foreach ($fehlend as $k => $v) {
+        $neu .= rtrim($k . ' ' . $v) . $eol;
+    }
+    $tmp = $file . '.tmp.' . getmypid();
+    $geschrieben = @file_put_contents($tmp, $neu, LOCK_EX);
+    if ($geschrieben !== strlen($neu)) {
+        @unlink($tmp);
+        return array('stand' => 'fehler', 'schluessel' => array_keys($fehlend));
+    }
+    @chmod($tmp, 0644);
+    if (!@rename($tmp, $file)) {
+        @unlink($tmp);
+        return array('stand' => 'fehler', 'schluessel' => array_keys($fehlend));
+    }
+    $log = wi_log_file('server');
+    if ($log === '' && $p['logdir'] !== '' && (is_dir($p['logdir']) || @mkdir($p['logdir'], 0775, true))) {
+        $log = $p['logdir'] . '/server.log';
+    }
+    if ($log !== '') {
+        @file_put_contents($log, date('Y-m-d H:i:s') . ' <INFO> Konfiguration vervollstaendigt: '
+            . count($fehlend) . ' fehlende Einstellung(en) mit der Vorgabe eingetragen ('
+            . implode(', ', array_keys($fehlend)) . ').' . "\n", FILE_APPEND);
+    }
+    return array('stand' => 'ergaenzt', 'schluessel' => array_keys($fehlend));
+}
+
+/**
  * Die Spalte Out/In als lesbaren Text.
  *
  * In der CSV steht "Out/-", "-/In" oder "Out/In". Das ist die Schreibweise

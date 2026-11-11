@@ -19,6 +19,9 @@
 #     erzeugt sonst 288 Zeilen am Tag.
 #  3. Es tut NICHTS, wenn das Plugin ausgeschaltet ist. Ein Waechter, der
 #     gegen den Willen des Anwenders arbeitet, ist schlimmer als keiner.
+#     Einzige Ausnahme seit 3.1.20: fehlende Einstellungen werden mit ihrer
+#     Vorgabe in die Konfiguration geschrieben - das aendert kein Verhalten,
+#     die Oberflaeche und der Dienst lesen dieselben Werte wie vorher.
 #
 # Diese Datei ist eine DATEI, kein Verzeichnis. LoxBerry fuehrt in
 # system/cron/cron.05min/ nur Dateien aus.
@@ -62,6 +65,23 @@ if [ -f "$MARKE" ]; then
         if [ "$ALTER" -ge -300 ] && [ "$ALTER" -lt 3600 ]; then
             exit 0
         fi
+    fi
+fi
+
+# --- Konfiguration vervollstaendigen (seit 3.1.20, Regeln/05) ---
+#
+# Fehlende Einstellungen einmal mit ihrer Vorgabe in die Datei schreiben -
+# nach der Marke (waehrend einer Aktualisierung nie) und VOR dem Schalter:
+# auch eine ausgeschaltete Anlage soll ihre Einstellungen vollstaendig in der
+# Datei sehen. Schreibt nur, wenn etwas fehlt, und nur an einer Datei mit
+# einer Zeile "enable 0|1"; eine Protokollzeile im Protokoll des Dienstes.
+# Als loxberry, nicht als root: die Datei wird neu angelegt (rename) und
+# gehoerte sonst root.
+if [ -x /usr/bin/php ] || command -v php >/dev/null 2>&1; then
+    if [ "$(id -u)" = "0" ] && id loxberry >/dev/null 2>&1; then
+        su loxberry -s /bin/sh -c "php '$BINPATH/wi_vervollstaendigen.php'" >/dev/null 2>&1
+    else
+        php "$BINPATH/wi_vervollstaendigen.php" >/dev/null 2>&1
     fi
 fi
 
