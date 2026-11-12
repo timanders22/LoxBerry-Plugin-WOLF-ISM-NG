@@ -1375,11 +1375,60 @@ function wi_wertpruefung_luecken()
 }
 
 /**
+ * 3.1.21: Seit welcher Fassung schreibt "Einstellungen sichern" diesen
+ * Schluessel? Stufe 0 = seit der ersten Sicherung (3.0.8), 1 = 3.0.9,
+ * 2 = 3.1.0 (SG-Ready), 3 = 3.1.5, 4 = 3.1.12 (Befehlsbruecke). Gemessen an
+ * wi_defaults() der Ordner 3.0.9, 3.1.0, 3.1.5 und 3.1.12; die Stufe 0 an der
+ * Liste, die der Kommentar in wi_defaults() fuer 3.0.8 nennt. 'stoercodes'
+ * fehlt hier mit Absicht: ob 3.0.8 sie schon schrieb, ist nicht gemessen, und
+ * ihr Vorgabewert (keine Tabelle) ist der sichere.
+ *
+ * wi_konfig_einlesen() leitet daraus ab, aus welcher Fassung eine Sicherung
+ * stammt (die hoechste Stufe unter ihren Schluesseln). Fehlt ihr ein
+ * Schluessel, den diese Fassung schon schrieb, ist sie unvollstaendig und
+ * wird abgewiesen; fehlt einer, den es damals noch nicht gab, kommt er mit
+ * dem Wert hinzu, den auch die Aktualisierung eintraegt, und der Hinweis
+ * nennt ihn. Ein neuer Schluessel in wi_defaults() gehoert hier mit der
+ * naechsten Stufe hinein; fehlt er hier, gilt er als nachtragbar.
+ */
+function wi_sicherung_stufen()
+{
+    $s = array();
+    foreach (array('enable', 'ism8i_port', 'input_port', 'fw_version', 'multicast_ip', 'multicast_port',
+                   'dp_log', 'output', 'mqtt', 'pull_on_write', 'online_timeout') as $k) {
+        $s[$k] = 0;
+    }
+    foreach (array('praefix', 'herzschlag', 'abgleich_takt') as $k) {
+        $s[$k] = 1;
+    }
+    foreach (array('sg_ein', 'sg_senden', 'sg_quelle', 'sg_awattar_ordner', 'sg_stunden', 'sg_block',
+                   'sg_horizont', 'sg_kreis', 'sg_ww_normal', 'sg_ww_laden', 'sg_korrektur', 'sg_14a',
+                   'sg_14a_modus', 'sg_14a_alter') as $k) {
+        $s[$k] = 2;
+    }
+    $s['sg_laden_max'] = 3;
+    foreach (array('befehle_mqtt_ein', 'befehle_mqtt_steuern', 'mqtt_zustand_schreiben') as $k) {
+        $s[$k] = 4;
+    }
+    return $s;
+}
+
+/**
  * Eine hochgeladene Sicherung pruefen und uebernehmen.
- * Rueckgabe: array(uebernommen, Liste der Beanstandungen)
+ * Rueckgabe: array(uebernommen, Liste der Beanstandungen, Sprachausgabe,
+ *                  nachgetragene Schluessel als "name=wert")
  *
  * Es werden ALLE Beanstandungen gesammelt, nicht nur die erste - und eine
  * halb gueltige Datei ueberschreibt die bestehende Konfiguration NICHT.
+ *
+ * 3.1.21: auch eine UNVOLLSTAENDIGE nicht. Bis 3.1.20 begann die Lesung mit
+ * wi_defaults(), und was in der Datei fehlte, kam still aus den Vorgaben.
+ * Gemessen (Pruefung-WOLF-ISM-NG-3.1.21/sicherung_faelle.py, Fall U): eine
+ * Sicherung ohne die Zeile "praefix" bei geltendem Praefix "heizung" wurde
+ * angenommen, danach galt "wolf_ng" - und mit dem Praefix wanderten alle
+ * MQTT-Themen. Der Durchzug vom 07.09.2026 (Regeln/05) laesst 30 Linien eine
+ * unvollstaendige Sicherung abweisen; diese Linie, deren Datei kein JSON ist,
+ * war nach ihrem Quelltext nicht dabei.
  */
 function wi_konfig_einlesen($roh)
 {
@@ -1388,6 +1437,7 @@ function wi_konfig_einlesen($roh)
     $bekannt = array_keys($neu);
     $gefunden = 0;
     $wi_da = array();
+    $wi_gesehen = array();
     /* Nr. 36 b (seit 3.1.8): die Sprachausgabe (dritte Rueckgabe). */
     $ans = array();
     $tts_roh = null;
@@ -1434,6 +1484,7 @@ function wi_konfig_einlesen($roh)
             $mangel[] = sprintf(wi_t('MELDUNG.SICH_SCHLUESSEL'), wi_e($k));
             continue;
         }
+        $wi_gesehen[$k] = true;     // 3.1.21: auch mit unzulaessigem Wert - der ist schon beanstandet, nicht "fehlend"
         // Der WERT wird geprueft, nicht nur der Schluessel - mit derselben
         // Positivliste, die auch der Speicher-Handler benutzt. Bis 3.0.10 kam
         // hier alles durch, was keinen Leerraum enthielt: eine Sicherung mit
@@ -1455,6 +1506,31 @@ function wi_konfig_einlesen($roh)
      * Update gilt er dann weiter (1). Die beiden Haken der Befehlsbruecke bleiben auf der Vorgabe (aus). */
     if ($gefunden > 0 && !isset($wi_da['mqtt_zustand_schreiben'])) {
         $neu['mqtt_zustand_schreiben'] = '1';
+    }
+    /* 3.1.21: fehlende Schluessel (siehe wi_sicherung_stufen() und den Kopf dieser Funktion). */
+    $wi_nachgetragen = array();
+    if ($gefunden > 0) {
+        $wi_stufen = wi_sicherung_stufen();
+        $wi_stufe = 0;
+        foreach (array_keys($wi_gesehen) as $wi_k) {
+            if (isset($wi_stufen[$wi_k]) && $wi_stufen[$wi_k] > $wi_stufe) {
+                $wi_stufe = $wi_stufen[$wi_k];
+            }
+        }
+        $wi_fehlt = array();
+        foreach (array_keys(wi_defaults()) as $wi_k) {
+            if (isset($wi_gesehen[$wi_k])) {
+                continue;
+            }
+            if (isset($wi_stufen[$wi_k]) && $wi_stufen[$wi_k] <= $wi_stufe) {
+                $wi_fehlt[] = $wi_k;
+            } else {
+                $wi_nachgetragen[] = $wi_k . '=' . $neu[$wi_k];
+            }
+        }
+        if ($wi_fehlt) {
+            $mangel[] = sprintf(wi_t('MELDUNG.SICH_FEHLT'), count($wi_fehlt), wi_e(implode(', ', $wi_fehlt)));
+        }
     }
     /* Nr. 36 b (seit 3.1.8): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt
      * die Datei eines (auch als Liste, Zahl oder null), stammt sie nicht aus "Einstellungen
@@ -1501,7 +1577,7 @@ function wi_konfig_einlesen($roh)
             $mangel[] = $q[1];
         }
     }
-    return array($mangel ? null : $neu, $mangel, $mangel ? null : $ans);
+    return array($mangel ? null : $neu, $mangel, $mangel ? null : $ans, $mangel ? array() : $wi_nachgetragen);
 }
 
 /**

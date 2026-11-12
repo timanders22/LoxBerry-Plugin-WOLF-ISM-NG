@@ -10,6 +10,13 @@ Plugins dieses Hauses an den Loxone Music Server, MusicServer4Home, eine
 eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (seit 3.1.8, ab Werk
 aus; Adresse und Vorlage nur im Heimnetz, die Sprechtoken in keiner Sicherung).
 
+## Neu in 3.1.21
+
+- **Einstellungen zurückspielen weist eine unvollständige Sicherung ab.** Bisher wurde eine Sicherung angenommen, auch wenn ihr Einstellungen fehlten; was fehlte, fiel still auf die Werkseinstellung zurück. Gemessen: eine Sicherung ohne die Zeile `praefix` wurde bei einem eingestellten Präfix `heizung` angenommen, danach galt `wolf_ng`, und mit dem Präfix wanderten alle MQTT-Themen. Jetzt nennt die Meldung die fehlenden Einstellungen, und es wird nichts geändert.
+- **Sicherungen früherer Fassungen bleiben zurückspielbar.** Das Plugin erkennt an den Einstellungen einer Sicherung, aus welcher Fassung sie stammt (seit 3.0.8, 3.0.9, 3.1.0, 3.1.5 oder 3.1.12). Was diese Fassung noch nicht kannte, kommt mit dem Wert hinzu, den auch eine Aktualisierung einträgt, und die Meldung nennt jede dieser Einstellungen mit ihrem Wert. Fehlt dagegen eine Einstellung, die die Fassung der Sicherung schon schrieb, wird die Datei abgewiesen. Die Störcodetabelle gilt dabei nie als fehlend: ihr Vorgabewert ist „keine Tabelle“.
+- Eine Meldung während einer Aktualisierung stand mit Umschrift da („Waehrend“); berichtigt.
+- Gemessen ist das mit einem Prüfstand unter PHP 7.4, 8.4 und 8.5 auf dem Arbeitsrechner (gültig, halb gültig, fremd, unvollständig, eine Sicherung im Format 3.0.9 und eine ohne `praefix`, `herzschlag` und `abgleich_takt`, wie sie 3.0.8 nach dem Quelltextkommentar schrieb; eine echte Sicherung aus 3.0.8 lag nicht vor), nicht am Gerät; die Linie ist dort nicht installiert.
+
 ## Neu in 3.1.20
 
 - **Konfiguration wird vervollständigt:** Fehlen in `wolf_ism8i.conf` Einstellungen, die eine neuere Fassung mitbringt, trägt der Fünfminutentakt (`cron/cron.05min` über `bin/wi_vervollstaendigen.php`) sie jetzt einmal mit ihrer Vorgabe in die Datei ein. Das Protokoll des Dienstes nennt die ergänzten Namen in einer Zeile, nie die Werte. Bisher ergänzte das Plugin fehlende Einstellungen nur beim Lesen; in die Datei kamen sie erst beim nächsten Speichern im Formular. Eine Datei, die der Dienst selbst angelegt hat, trägt 15 der 33 Einstellungen; dort kommen 18 hinzu (Störcodetabelle, SG-Ready und Paragraph 14a, die beiden Haken der Befehlsbrücke), alle mit den Werten, die das Plugin bisher ohnehin angenommen hat. Am Verhalten ändert sich nichts.

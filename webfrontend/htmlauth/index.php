@@ -316,7 +316,7 @@ if ($wi_post && isset($_POST['laden'])) {
         $wi_error = wi_t('MELDUNG.SICH_ZU_GROSS');
     } else {
         $roh = (string) @file_get_contents($wi_up['tmp_name']);
-        list($neu, $mangel, $wi_ans_s) = wi_konfig_einlesen($roh);
+        list($neu, $mangel, $wi_ans_s, $wi_sich_nach) = wi_konfig_einlesen($roh);
         if ($neu === null) {
             // Eine halb gueltige Datei ueberschreibt NICHTS.
             $wi_beanstandungen = $mangel;
@@ -324,6 +324,10 @@ if ($wi_post && isset($_POST['laden'])) {
         } elseif (wi_config_write($neu)) {
             $wi_saved = true;
             $wi_hinweis = wi_t('MELDUNG.SICH_UEBERNOMMEN') . ' ' . wi_dienst_uebernehmen($neu, null);
+            /* 3.1.21: eine Sicherung aus einer frueheren Fassung - was sie nicht kennt, steht mit Namen und Wert da. */
+            if ($wi_sich_nach) {
+                $wi_hinweise[] = wi_e(sprintf(wi_t('MELDUNG.SICH_NACHGETRAGEN'), implode(', ', $wi_sich_nach)));
+            }
             // Gruppe 5 (3.1.12): Abo-Datei und Befehlsbruecke folgen der zurueckgespielten Einstellung.
             wi_abo_datei(wi_cfg($neu, 'praefix', 'wolf_ng'), true);
             $wi_bm = wi_bruecke_meldung(wi_bruecke_schalten(true));
