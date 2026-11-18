@@ -388,26 +388,31 @@ function wi_pruefzeilen($cfg)
  * Sichern und Zurueckspielen als RUNDLAUF: die Datei, die der eine Knopf
  * ausliefert, dem anderen vorlegen.
  *
- * Bis 3.0.10 scheiterte genau das im Werkszustand. wi_konfig_text() schreibt
+ * Bis 3.0.10 scheiterte genau das im Werkszustand. wi_konfig_text() schrieb
  * den leeren Vorgabewert von 'stoercodes' als Zeile mit nur einem Feld, und
  * wi_konfig_einlesen() zaehlte eine solche Zeile als Beanstandung - womit die
  * GANZE Datei abgelehnt wurde. Auf jeder frischen Anlage war der Umzug auf
  * einen zweiten LoxBerry damit unmoeglich, und die Meldung zeigte auf eine
  * Einstellung, die der Anwender nie angefasst hatte.
  *
- * Diese Zeile misst das Erzeugnis, nicht den Quelltext.
+ * 3.1.22: die Datei baut und liest das gemeinsame Sicherungsmodul
+ * (wi_sicherung_daten(), sicherung_lesen()) - dieselben Funktionen wie die
+ * beiden Knoepfe. Diese Zeile misst das Erzeugnis, nicht den Quelltext.
  */
 function wi_sicherung_rundlauf($cfg)
 {
-    $txt = wi_konfig_text($cfg);
-    list($neu, $mangel) = wi_konfig_einlesen($txt);
-    if ($neu === null) {
+    $b = wi_sicherung_beschreibung();
+    $js = sicherung_json(wi_sicherung_daten($cfg));
+    $r = sicherung_lesen($b, $js, $cfg);
+    if (!$r['ok']) {
+        $erster = $r['beanstandet'] ? (string) $r['beanstandet'][0]['text'] : '-';
         return array(false, sprintf(wi_t('PZ.RUNDLAUF_NEIN'),
-                                    count($mangel), strip_tags((string) $mangel[0])));
+                                    count($r['beanstandet']), strip_tags(html_entity_decode($erster, ENT_QUOTES, 'UTF-8'))));
     }
     $soll = count(wi_defaults());
-    if (count($neu) !== $soll) {
-        return array(false, sprintf(wi_t('PZ.RUNDLAUF_ZAHL'), count($neu), $soll));
+    $ist = count(array_intersect_key($r['neu'], wi_defaults()));
+    if ($ist !== $soll || (int) $r['anzahl'] < $soll) {
+        return array(false, sprintf(wi_t('PZ.RUNDLAUF_ZAHL'), (int) $r['anzahl'], $soll));
     }
     return array(true, sprintf(wi_t('PZ.RUNDLAUF_JA'), $soll));
 }

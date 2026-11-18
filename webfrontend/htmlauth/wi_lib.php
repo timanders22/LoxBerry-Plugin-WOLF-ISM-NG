@@ -26,6 +26,11 @@
  * seit 3.1.8; seit 3.1.13 Stamm 1.2.1 mit weiteren Ausgabezielen, wi_mit_zielen(), Welle Mehrfach-Ziele).
  * Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
+/* 3.1.22: die Abschrift des gemeinsamen Sicherungsmoduls (Stammfassung Werkzeuge/gemeinsam/sicherung.php, byte-gleich,
+ * Werkzeuge/sicherung_einbauen.py) liegt neben dieser Datei. "Einstellungen sichern" und "Einstellungen zurueckspielen"
+ * laufen darueber, in allen Linien gleich (Auftrag des Hausherrn 12.11.2026); diese Linie uebergibt nur ihre
+ * Beschreibung (wi_sicherung_beschreibung()). Antwortet als Einstieg mit 403. */
+require_once __DIR__ . '/sicherung.php';
 
 if (!function_exists('wi_e')) {
     /**
@@ -415,7 +420,7 @@ function wi_defaults()
          * (befehle_mqtt_steuern, zweiter Haken) - beide ab Werk aus. mqtt_zustand_schreiben ist
          * der alte Weg (publish auf das Thema des Istwerts); ihn liest auch der Dienst. Bei einer
          * Neuinstallation aus, ein Update von 3.1.11 traegt 1 ein (postupgrade.sh), eine Sicherung
-         * ohne den Schluessel ebenso (wi_konfig_einlesen()). */
+         * ohne den Schluessel ebenso (wi_sicherung_beschreibung(), 'vorbehandeln'). */
         'befehle_mqtt_ein'       => '0',
         'befehle_mqtt_steuern'   => '0',
         'mqtt_zustand_schreiben' => '0',
@@ -445,7 +450,7 @@ function wi_config_read()
         }
         $f = preg_split('/\s+/', $t);
         // Eine Zeile mit nur einem Schluessel ist ein LEERER Wert, keine
-        // kaputte Zeile - dieselbe Regel wie in wi_konfig_einlesen(). Der
+        // kaputte Zeile - dieselbe Regel wie in wi_sicherung_aus_text(). Der
         // Werkszustand von 'stoercodes' sieht genau so aus.
         if (count($f) === 1) {
             $f[] = '';
@@ -510,11 +515,20 @@ function wi_config_write($cfg)
         @unlink($tmp);
         return false;
     }
+    /* 0644 wie bisher. Gemessen 18.11.2026 am Code: der Dienst laeuft als loxberry (bin/wolf_server:103,
+     * daemon/daemon:91, cron/cron.05min:223), lesen koennte er also auch 0600. Die Datei traegt aber weder
+     * Zugangsdaten noch ein Token (wi_defaults()). Seit der Angleichung vom 18.11.2026 (Frage 39 der Nacht) tragen
+     * die Zweitschrift und jede Wiederherstellung dieselben Rechte: wi_zweitschrift_ziehen() 0644, preupgrade.sh die
+     * Rechte des Originals (chmod --reference), postinstall.sh 0644 nach dem Zurueckspielen. */
     @chmod($tmp, 0644);
     if (!@rename($tmp, $file)) {
         @unlink($tmp);
         return false;
     }
+    /* 3.1.22 (Entscheidung des Hausherrn 18.11.2026, "Ja, beim Speichern"): jedes Speichern zieht die Zweitschrift
+     * neben dem Konfigordner mit, mit denselben Rechten. Misslingt sie, bleibt das Speichern gelungen und das
+     * Protokoll sagt es; das Zurueckspielen einer Sicherung meldet es zusaetzlich (Modul, 'zweitschrift'). */
+    wi_zweitschrift_ziehen($file);
     return true;
 }
 
@@ -551,8 +565,8 @@ function wi_config_write($cfg)
  *    Doppelkreuz beginnt, mit ihm anfaengt (ohne Ruecksicht auf Gross- und
  *    Kleinschreibung, wie wi_config_read() und loadConfig() lesen);
  *  - Zeilenende der Datei bleibt, Weg wie wi_config_write(): Nebendatei mit
- *    der Prozessnummer, Laengenvergleich, 0644, rename(); eine Zweitschrift
- *    fuehrt diese Linie nicht;
+ *    der Prozessnummer, Laengenvergleich, 0644, rename(); seit 3.1.22 zieht
+ *    es die Zweitschrift mit (wi_zweitschrift_ziehen()), wie jedes Speichern;
  *  - geschrieben wird nur, wenn etwas fehlt; dann eine Protokollzeile im
  *    Protokoll des Dienstes mit den Namen, nie mit Werten.
  *
@@ -614,6 +628,7 @@ function wi_config_vervollstaendigen()
         @unlink($tmp);
         return array('stand' => 'fehler', 'schluessel' => array_keys($fehlend));
     }
+    wi_zweitschrift_ziehen($file);     // 3.1.22: die Zweitschrift folgt jedem Schreiben der Konfiguration
     $log = wi_log_file('server');
     if ($log === '' && $p['logdir'] !== '' && (is_dir($p['logdir']) || @mkdir($p['logdir'], 0775, true))) {
         $log = $p['logdir'] . '/server.log';
@@ -1230,29 +1245,460 @@ function wi_befehl_senden($cfg, $zeile)
 }
 
 /* ==================================================================
- * Sichern und Zurueckspielen (V17)
+ * Sichern und Zurueckspielen (V17; seit 3.1.22 ueber das gemeinsame
+ * Sicherungsmodul sicherung.php, Stammfassung 1.2.9)
  * ================================================================== */
 
-/** Die Konfiguration als Text - genau das Format, das der Dienst liest. */
-function wi_konfig_text($cfg)
+/** Die Kopfzeile, die "Einstellungen sichern" von 3.0.9 bis 3.1.21 als erste Zeile der Textsicherung schrieb
+ *  (gemessen 18.11.2026 an wi_konfig_text() aller 24 Fassungen 3.0.9 bis 3.1.21 im Arbeitsordner und unter N:).
+ *  Davor stand hoechstens eine Zeile "# _warnung: ..." (X-3, seit 3.1.6). */
+if (!defined('WI_TEXTKOPF')) { define('WI_TEXTKOPF', '# Wolf ISM8 - Sicherung der Einstellungen'); }
+/** Die Kommentarzeile, die jede wolf_ism8i.conf im Kopf traegt - die mitgelieferte und jede, die wi_config_write()
+ *  schreibt (gemessen 18.11.2026 an allen Fassungen 3.0.8 bis 3.1.22 im Arbeitsordner und unter N:, je Archiv bzw.
+ *  Ordner die Datei config/wolf_ism8i.conf und der Kopf in wi_config_write(): ueberall die zweite Zeile). */
+if (!defined('WI_CONFKOPF')) { define('WI_CONFKOPF', '# Konfiguration des Wolf-ISM8-Servers.'); }
+
+/**
+ * 3.1.22: Die Beschreibung dieser Linie fuer das gemeinsame Sicherungsmodul (sicherung.php, Stammfassung 1.2.9).
+ * Bis 3.1.21 standen hier eine eigene Textsicherung (wi_konfig_text(), "schluessel wert" je Zeile) und eine eigene
+ * Lesefunktion (wi_konfig_einlesen()): ein unbekannter Schluessel wies die ganze Datei ab, die Grenze war 64 kB,
+ * einen Haken gab es nicht. Eine neue Sicherung ist JSON; eine alte Textsicherung wandelt wi_sicherung_aus_text()
+ * vorweg in diese Form (Entscheidung des Hausherrn 18.11.2026, "Linie wandelt vorweg um").
+ *
+ * Kennzeichen: der Name des Repositorys. Die Textsicherungen trugen keines; die umgewandelte Datei traegt statt
+ * dessen den Kopf _aus_textsicherung, und der Uebersetzer erkennt sie daran (wi_sicherung_alt_erkennen()) - die
+ * Meldung sagt "aeltere Sicherung erkannt", denn genau das ist sie.
+ *
+ * Inhalt: alle Einstellungen aus wi_defaults() (wolf_ism8i.conf) und als Teile die Sprachausgabe aus
+ * wolf_ansage.json (ansage_stoerung, ansage_ausfall, tts ohne Sprechtoken, ansage_regeln) - wie bis 3.1.21. Diese
+ * Linie hat weder Aktionstoken noch Zugangsdaten. Nie in der Datei: die Sprechtoken und der Vermerk
+ * ansage_token_herkunft; beim Zurueckspielen bleiben die geltenden (wi_sicherung_speichern()).
+ *
+ * Was fehlen darf, wie bis 3.1.21 (wi_sicherung_stufen()): die elf Einstellungen der ersten Sicherung (Stufe 0)
+ * muss jede Datei tragen ('pflicht'); jede spaeter dazugekommene behaelt fehlend den geltenden Wert und wird genannt
+ * (Regel 6 der Welle 1) - es sei denn, die Datei stammt nach ihren Schluesseln aus einer Fassung, die sie schon
+ * schrieb: dann ist sie unvollstaendig und wird abgewiesen (wi_sicherung_quer()). Uebergang wie bis 3.1.21: fehlt
+ * mqtt_zustand_schreiben (Sicherung bis 3.1.11), gilt 1 - wie bei der Aktualisierung (postupgrade.sh).
+ * Jeder Wert geht durch wi_wert_taugt(), dieselbe Pruefung wie im Formular, die Querpruefungen der SG-Werte wie bisher.
+ */
+function wi_sicherung_beschreibung()
 {
-    $t = "# Wolf ISM8 - Sicherung der Einstellungen\n";
-    $t .= '# ' . date('d.m.Y H:i') . "\n";
-    foreach (wi_defaults() as $k => $vorgabe) {
-        $t .= $k . ' ' . (isset($cfg[$k]) && $cfg[$k] !== '' ? $cfg[$k] : $vorgabe) . "\n";
+    $p = wi_paths();
+    $stufen = wi_sicherung_stufen();
+    $schluessel = array();
+    foreach (array_keys(wi_defaults()) as $k) {
+        $schluessel[$k] = (isset($stufen[$k]) && $stufen[$k] === 0) ? array() : array('fehlt' => 'behalten');
+        $schluessel[$k]['wandeln'] = function ($w) { return (string) $w; };
     }
-    /* Nr. 36 b (seit 3.1.8): die Sprachausgabe - je Anlass ein Haken und der Block tts als
-     * JSON in EINER Zeile, ohne Sprechtoken. Sie liegt nicht in wolf_ism8i.conf, sondern in
-     * wolf_ansage.json; die Sicherung traegt beides. */
+    /* Die Teile der Sprachausgabe: tts und ansage_regeln als Bloecke (Regel 2 und 3 des Moduls auch dort). Die
+     * Sprechtoken stehen nicht im Knoten - traegt eine Datei eines, weist wi_sicherung_quer() sie ab. */
+    $tts = array_keys(ansage_vorgaben());
+    $tts_knoten = array();
+    if (wi_mit_zielen()) {
+        $tts[] = 'ziele';
+        $tts_knoten['ziele'] = sicherung_liste(array('art', 'wo', 'laut', 'sprache', 'ein'));
+    }
+    $schluessel['tts'] = sicherung_block($tts, $tts_knoten);
+    $schluessel['ansage_regeln'] = sicherung_block(array_keys(ansage_regeln_vorgaben()));
+    return array(
+        'kennzeichen' => 'LoxBerry-Plugin-WOLF-ISM-NG',
+        'hinweis' => wi_t('EINST.SICH_KOPF_HINWEIS'),
+        /* Die Fassung im Kopf kommt aus der Plugin-Datenbank bzw. plugin.cfg (sicherung_fassung_lesen()). */
+        'home' => (string) $p['home'],
+        'ordner' => (string) $p['plugin'],
+        'plugin_cfg' => dirname(dirname(__DIR__)) . '/plugin.cfg',
+        'vorgaben' => wi_defaults(),
+        'schluessel' => $schluessel,
+        'teile' => array(
+            'ansage_stoerung' => function ($w) { return wi_sicherung_teil_haken('ansage_stoerung', $w); },
+            'ansage_ausfall' => function ($w) { return wi_sicherung_teil_haken('ansage_ausfall', $w); },
+            'tts' => 'wi_sicherung_teil_tts',
+            'ansage_regeln' => 'wi_sicherung_teil_regeln',
+        ),
+        'teile_jetzt' => array(
+            'tts' => function () { $a = wi_ansage_lesen(); return ansage_sicherung_bereinigen($a['tts']); },
+            'ansage_regeln' => function () { return wi_ansage_regeln(wi_ansage_lesen()); },
+        ),
+        'pruefen' => function ($k, $w) {
+            $ok = (is_string($w) || is_int($w)) && wi_wert_taugt((string) $k, (string) $w);
+            return $ok ? '' : sprintf(wi_t('MELDUNG.SICH_WERT'), wi_e((string) $k));
+        },
+        'quer' => 'wi_sicherung_quer',
+        'uebersetzer' => 'wi_sicherung_alt_erkennen',
+        /* Uebergang wie bis 3.1.21: eine Sicherung bis 3.1.11 kennt mqtt_zustand_schreiben nicht; der alte
+         * Schreibweg wirkte dort ohne Haken und gilt weiter (1), wie bei der Aktualisierung. */
+        'vorbehandeln' => function ($bereit, $jetzt, $daten) {
+            if (is_array($daten) && !array_key_exists('mqtt_zustand_schreiben', $daten)) {
+                $bereit['mqtt_zustand_schreiben'] = '1';
+            }
+            return $bereit;
+        },
+        'jetzt' => 'wi_config_read',
+        't' => 'wi_t',
+        'e' => 'wi_e',
+    );
+}
+
+/** Teil ansage_stoerung / ansage_ausfall: ein Haken 0 oder 1, wie bis 3.1.21. */
+function wi_sicherung_teil_haken($k, $w)
+{
+    if ((is_string($w) || is_int($w)) && preg_match('/^[01]\z/', (string) $w) === 1) {
+        return array((string) $w, array());
+    }
+    return array(null, array(sprintf(wi_t('MELDUNG.SICH_WERT'), wi_e($k))));
+}
+
+/**
+ * Teil tts: Ausgabeart, Adresse und Vorlage wie im Formular (ansage_wert_pruefen()). Fehlt die Liste der weiteren
+ * Ziele (Sicherung bis 3.1.12), bleiben die geltenden und werden genannt (ansage_sicherung_spaet()); die geltenden
+ * Sprechtoken bleiben. Wie bis 3.1.21.
+ */
+function wi_sicherung_teil_tts($w)
+{
+    if (!is_array($w)) {
+        return array(null, array(wi_e(wi_t('SPRACHAUSGABE.SICH_TTS_JSON'))));
+    }
+    $g = '';
+    $tp = ansage_wert_pruefen(ansage_sicherung_bereinigen($w), $g, wi_ansage_modi());
+    if ($tp === null) {
+        return array(null, array(wi_e(sprintf(wi_t('SPRACHAUSGABE.SICH_TTS'), ansage_kennung_text($g, wi_ansage_k())))));
+    }
+    $jt = wi_ansage_lesen();
+    $spaet = array();
+    if (function_exists('ansage_sicherung_spaet')) {
+        list($tp, $spaet) = ansage_sicherung_spaet($tp, $jt['tts']);
+    }
+    list($tp) = ansage_vervollstaendigen($tp, 'aus');
+    $tp = ansage_sicherung_tokens_behalten($tp, $jt['tts']);
+    $h = $spaet ? array(wi_e(sprintf(wi_t('SPRACHAUSGABE.SICH_SPAET'), implode(', ', $spaet)))) : array();
+    return array($tp, array(), $h);
+}
+
+/** Teil ansage_regeln: Nachtruhe, Sperre, Tafel und HomePod wie im Formular (ansage_regeln_wert()), wie bis 3.1.21. */
+function wi_sicherung_teil_regeln($w)
+{
+    $g = '';
+    $r = ansage_regeln_wert($w, $g);
+    if ($r === null) {
+        return array(null, array(sprintf(wi_t('MELDUNG.SICH_WERT'), 'ansage_regeln')));
+    }
+    return array($r, array());
+}
+
+/**
+ * Was ueber einzelne Werte hinausgeht, wie bis 3.1.21. Rueckgabe fuer das Modul: Liste von array(Name, Text); $daten
+ * ist die Datei vor den Regeln 2 und 3.
+ *  - Traegt die Datei ein Sprechtoken, stammt sie nicht aus "Einstellungen sichern" (der Knopf schreibt nie eines):
+ *    abgewiesen, das geltende Token bleibt.
+ *  - Was die Umwandlung einer Textsicherung nicht lesen konnte (Kopf _text_mangel), weist seit Modul 1.2.11 das Modul
+ *    selbst ab, mit seinen Saetzen (Regel 21); bis dahin stand diese Pruefung hier (MELDUNG.SICH_ZEILE ...).
+ *  - Fehlt eine Einstellung, die die Fassung der Sicherung schon schrieb (Stufe nach wi_sicherung_stufen(), die
+ *    hoechste unter ihren Schluesseln; Stufe 0 prueft das Modul selbst als 'pflicht'): unvollstaendig, abgewiesen.
+ *  - Die Querpruefungen der SG-Werte (wi_sg_querpruefung()), nur wenn sonst nichts beanstandet ist.
+ */
+function wi_sicherung_quer($neu, $r = null, $daten = null)
+{
+    $aus = array();
+    if (!is_array($daten)) {
+        return $aus;
+    }
+    if (isset($daten['tts']) && is_array($daten['tts']) && ($tm = ansage_sicherung_mangel($daten['tts']))) {
+        $aus[] = array('tts', wi_e(sprintf(wi_t('SPRACHAUSGABE.SICH_TTS_TOKEN'), implode(', ', $tm))));
+    }
+    $stufen = wi_sicherung_stufen();
+    $stufe = 0;
+    foreach (array_keys($daten) as $k) {
+        if (isset($stufen[$k]) && $stufen[$k] > $stufe) {
+            $stufe = $stufen[$k];
+        }
+    }
+    $fehlt = array();
+    foreach ($stufen as $k => $s) {
+        if ($s > 0 && $s <= $stufe && !array_key_exists($k, $daten)) {
+            $fehlt[] = $k;
+        }
+    }
+    if ($fehlt) {
+        $aus[] = array(implode(',', $fehlt), sprintf(wi_t('MELDUNG.SICH_FEHLT'), count($fehlt), wi_e(implode(', ', $fehlt))));
+    }
+    $schon = is_array($r) && !empty($r['beanstandet']);
+    if (!$aus && !$schon && is_array($neu)) {
+        foreach (wi_sg_querpruefung($neu) as $q) {
+            $aus[] = array($q[0], $q[1]);
+        }
+    }
+    return $aus;
+}
+
+/**
+ * Der Uebersetzer: eine Datei ohne Kennzeichen wird nur angenommen, wenn sie die Umwandlung einer Textsicherung oder
+ * einer wolf_ism8i.conf dieser Linie ist (Kopf _aus_textsicherung mit der Kopfzeile WI_TEXTKOPF bzw. WI_CONFKOPF,
+ * wi_sicherung_aus_text()). Jede andere Datei ohne Kennzeichen weist das Modul ab (K_OHNE_KENNZEICHEN).
+ */
+function wi_sicherung_alt_erkennen($d)
+{
+    return (is_array($d) && isset($d['_aus_textsicherung'])
+            && ($d['_aus_textsicherung'] === WI_TEXTKOPF || $d['_aus_textsicherung'] === WI_CONFKOPF)) ? $d : null;
+}
+
+/**
+ * 3.1.22 ("Linie wandelt vorweg um", Entscheidung des Hausherrn 18.11.2026): eine Textsicherung der Fassungen 3.0.9
+ * bis 3.1.21 vorweg in die JSON-Form dieser Fassung bringen; das Modul weist Nicht-JSON sonst sofort ab (K_KEIN_JSON).
+ * Rueckgabe: der Text, den sicherung_zurueckspielen() bekommt.
+ *
+ * Erkannt wird sie nur an ihrer Kopfzeile WI_TEXTKOPF (davor hoechstens Zeilen "# _warnung").
+ *
+ * Ebenso eine hochgeladene wolf_ism8i.conf (oder ihre Zweitschrift <ordner>.backup.wolf_ism8i.conf): bis 3.1.21 nahm
+ * das Zurueckspielen sie an, denn wi_konfig_einlesen() las jeden Text mit Zeilen "schluessel wert"; 3.1.22 wies sie
+ * zunaechst ab (Entscheidung des Hausherrn 18.11.2026, Frage 38 der Nacht: "Ich folge deinen Empfehlungen" - wieder
+ * annehmen, vorweg umwandeln wie die Textsicherungen). Erkannt wird sie an der Kommentarzeile WI_CONFKOPF im
+ * Kommentarkopf vor der ersten Einstellung. Gelesen wird sie genau wie eine Textsicherung; der Kopf
+ * _aus_textsicherung traegt dann WI_CONFKOPF. Die Sprachausgabe steht nicht in der wolf_ism8i.conf
+ * (wolf_ansage.json), sie bleibt deshalb, wie sie gilt.
+ *
+ * Jeder andere Text geht unveraendert ans Modul und wird dort als "keine lesbare Sicherung" abgewiesen.
+ * $art sagt dem Aufrufer, was umgewandelt wurde: 'text', 'conf' oder '' (nichts).
+ * Gelesen wird wie bis 3.1.21 (wi_konfig_einlesen()): Zeilen mit # am Anfang sind Kommentar, je Zeile
+ * "schluessel wert", ein Schluessel allein ist ein leerer Wert, Schluessel klein; "tts" und "ansage_regeln" tragen
+ * ein JSON-Objekt. Nichts wird verschluckt und nichts zurechtgebogen:
+ *  - ein Schluessel, den diese Fassung nicht kennt, kommt als solcher in die Datei; das Modul verwirft ihn und nennt
+ *    ihn (bis 3.1.21: die ganze Datei abgewiesen);
+ *  - eine Zeile mit mehr als zwei Feldern (ZEILE), ein doppelter Schluessel (DOPPELT), ein Schluessel mit _ am Anfang
+ *    (KOPF) und ein tts oder ansage_regeln, das kein JSON-Objekt ist (WERT), kommen NICHT mit ihrem Wert hinein,
+ *    sondern mit ihrem Namen und der festen Kennung des Moduls in den Kopf _text_mangel
+ *    (sicherung_text_mangel_eintragen(), Modul 1.2.11); das Modul weist die Datei dann ab (wie bis 3.1.21), mit
+ *    Namen, nie mit Wert (Regel 21; bis dahin die Kennungen zeile, doppelt, json und wi_sicherung_quer());
+ *  - laesst sich das Ergebnis nicht als JSON schreiben (ungueltiges UTF-8), geht der Text unveraendert ans Modul.
+ */
+function wi_sicherung_aus_text($roh, &$art = null)
+{
+    $art = '';
+    $roh = (string) $roh;
+    $t = (substr($roh, 0, 3) === "\xEF\xBB\xBF") ? substr($roh, 3) : $roh;
+    $l = ltrim($t);
+    if ($l === '' || $l[0] === '{') {
+        return $roh;
+    }
+    $zeilen = preg_split('/\R/', $t);
+    foreach ($zeilen as $z) {
+        $z = trim($z);
+        if ($z === '' || strpos($z, '# _warnung') === 0) {
+            continue;
+        }
+        $art = ($z === WI_TEXTKOPF) ? 'text' : '';
+        break;
+    }
+    if ($art === '') {
+        /* Frage 38: eine wolf_ism8i.conf - WI_CONFKOPF im Kommentarkopf, vor der ersten Zeile, die kein Kommentar ist. */
+        foreach ($zeilen as $z) {
+            $z = trim($z);
+            if ($z === '') {
+                continue;
+            }
+            if ($z[0] !== '#') {
+                break;
+            }
+            if ($z === WI_CONFKOPF) {
+                $art = 'conf';
+                break;
+            }
+        }
+    }
+    if ($art === '') {
+        return $roh;
+    }
+    $d = array('_aus_textsicherung' => $art === 'conf' ? WI_CONFKOPF : WI_TEXTKOPF);
+    $werte = array();
+    $mangel = array();
+    foreach ($zeilen as $z) {
+        $z = trim($z);
+        if ($z === '' || $z[0] === '#') {
+            continue;
+        }
+        $f = preg_split('/\s+/', $z, 2);
+        $k = strtolower($f[0]);
+        $w = isset($f[1]) ? $f[1] : '';
+        if (array_key_exists($k, $werte) || isset($mangel[$k])) {
+            $mangel[$k] = 'DOPPELT';
+            unset($werte[$k]);
+            continue;
+        }
+        if ($k[0] === '_') {
+            $mangel[$k] = 'KOPF';
+            continue;
+        }
+        if ($k === 'tts' || $k === 'ansage_regeln') {
+            $j = json_decode($w, true);
+            if (!is_array($j)) {
+                $mangel[$k] = 'WERT';
+                continue;
+            }
+            $werte[$k] = $j;
+            continue;
+        }
+        if (preg_match('/\s/', $w)) {
+            $mangel[$k] = 'ZEILE';
+            continue;
+        }
+        $werte[$k] = $w;
+    }
+    /* Modul 1.2.11: eingetragen mit den festen Kennungen des Moduls. Bis dahin hiess die Laufvariable hier $art und
+     * ueberschrieb die Rueckgabe $art ('text'/'conf') mit der letzten Kennung - ohne Wirkung, denn eine solche Datei
+     * wird abgewiesen und der Hinweis nur bei Erfolg gegeben. */
+    foreach ($mangel as $k => $kennung) {
+        sicherung_text_mangel_eintragen($d, (string) $k, $kennung);
+    }
+    $js = json_encode($d + $werte, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (!is_string($js)) {
+        $art = '';      // nicht umgewandelt: der Text geht unveraendert ans Modul
+        return $roh;
+    }
+    return $js;
+}
+
+/** Die Sicherung als Feld (Kopf und Inhalt baut das Modul): die Einstellungen aus $cfg und die Sprachausgabe als
+ *  Teile, ohne Sprechtoken und ohne Vermerk. */
+function wi_sicherung_daten($cfg)
+{
     $a = wi_ansage_lesen();
-    foreach (wi_ansage_anlaesse() as $n) {
-        $t .= 'ansage_' . $n . ' ' . $a[$n] . "\n";
+    $teile = array(
+        'ansage_stoerung' => (string) $a['stoerung'],
+        'ansage_ausfall' => (string) $a['ausfall'],
+        'tts' => ansage_sicherung_bereinigen($a['tts']),
+        'ansage_regeln' => wi_ansage_regeln($a),
+    );
+    return sicherung_bauen(wi_sicherung_beschreibung(), $cfg, $teile);
+}
+
+/** Die Sicherungsdatei als JSON-Text; '' wenn sie sich nicht bilden laesst. X-3 wie bisher: wuerde das
+ *  Zurueckspielen sie abweisen, nennt der Kopf _warnung die Namen (nie Werte); geliefert wird trotzdem. */
+function wi_sicherung_json($cfg)
+{
+    return sicherung_json(wi_sicherung_daten($cfg));
+}
+
+/**
+ * Speichern beim Zurueckspielen: genau den Stand, den das Modul liefert. wi_config_write() schreibt die
+ * Einstellungen aus wi_defaults() und zieht die Zweitschrift mit. Die Teile der Sprachausgabe gehen nach
+ * wolf_ansage.json; die geltenden Sprechtoken (in wi_sicherung_teil_tts()) und der geltende Vermerk
+ * ansage_token_herkunft bleiben. Was die Datei an Sprachausgabe nicht traegt (Sicherung bis 3.1.7), bleibt, wie es
+ * gilt. Rueckgabe false, wenn eine der beiden Dateien nicht geschrieben wurde.
+ */
+function wi_sicherung_speichern($neu, $jetzt, $r)
+{
+    if (!wi_config_write($neu)) {
+        return false;
     }
-    $t .= "# Sprachausgabe ohne Sprechtoken (Alexa-NG, Chromecast 4 Lox NG)\n";
-    $t .= 'tts ' . json_encode(ansage_sicherung_bereinigen($a['tts']),
-                               JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
-    $t .= 'ansage_regeln ' . json_encode(wi_ansage_regeln($a), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";     // 3.1.14: ohne Sprechtoken, ohne Vermerk
-    return $t;
+    $t = (is_array($r) && isset($r['teile']) && is_array($r['teile'])) ? $r['teile'] : array();
+    if (!$t) {
+        return true;
+    }
+    $a = wi_ansage_lesen();
+    foreach (array('ansage_stoerung' => 'stoerung', 'ansage_ausfall' => 'ausfall', 'tts' => 'tts',
+                   'ansage_regeln' => 'ansage_regeln') as $teil => $feld) {
+        if (array_key_exists($teil, $t) && $t[$teil] !== null) {
+            $a[$feld] = $t[$teil];
+        }
+    }
+    if (!wi_ansage_schreiben($a)) {
+        wi_oberflaeche_log('<ERROR> Sicherung: ' . wi_ansage_datei() . ' liess sich nicht schreiben.');
+        return false;
+    }
+    return true;
+}
+
+/** Den Dienst nachziehen und sagen, was mit ihm geschah - dieselben Schritte wie bis 3.1.21. */
+function wi_sicherung_nachziehen($neu)
+{
+    $h = array();
+    $an = wi_cfg($neu, 'enable', '0') === '1';
+    $aus = trim((string) wi_dienst_uebernehmen($neu, null));
+    $h[] = sprintf(wi_t($an ? 'MELDUNG.SICH_DIENST_EIN' : 'MELDUNG.SICH_DIENST_AUS'), wi_e($aus !== '' ? $aus : '-'));
+    // Gruppe 5 (3.1.12): Abo-Datei und Befehlsbruecke folgen der zurueckgespielten Einstellung.
+    wi_abo_datei(wi_cfg($neu, 'praefix', 'wolf_ng'), true);
+    $bm = wi_bruecke_meldung(wi_bruecke_schalten(true));
+    if ($bm !== '') {
+        $h[] = $bm;
+    }
+    return $h;
+}
+
+/** Die Beschreibung mit allem, was sicherung_zurueckspielen() braucht. */
+function wi_sicherung_zum_zurueckspielen()
+{
+    $b = wi_sicherung_beschreibung();
+    $b['speichern'] = 'wi_sicherung_speichern';
+    $z = wi_zweitschrift_pfad();
+    if ($z !== '') {
+        $b['zweitschrift'] = function () use ($z) { return array(wi_paths()['config'], $z); };
+    }
+    $b['nachziehen'] = function ($neu) { return wi_sicherung_nachziehen($neu); };
+    $b['log'] = function ($z) { wi_oberflaeche_log('<INFO> ' . $z); };
+    return $b;
+}
+
+/**
+ * 3.1.22 (Entscheidung des Hausherrn 18.11.2026, "Ja, beim Speichern"): die Zweitschrift neben dem Konfigordner,
+ * derselbe Name wie in preupgrade.sh und postinstall.sh (<ordner>.backup.wolf_ism8i.conf). '' ohne LoxBerry-Wurzel
+ * (ausgepacktes Archiv) - dann gibt es keine.
+ */
+function wi_zweitschrift_pfad()
+{
+    $p = wi_paths();
+    return $p['home'] !== '' ? $p['home'] . '/config/plugins/' . $p['plugin'] . '.backup.wolf_ism8i.conf' : '';
+}
+
+/**
+ * Die Zweitschrift nachziehen: byte-gleich mit der eben geschriebenen Konfiguration, dieselben Rechte (0644, siehe
+ * wi_config_write()), unteilbar (Nebendatei mit der Prozessnummer, Laengen- und Inhaltsvergleich, rename()). Nur
+ * eine Datei MIT Inhalt (Zeile "enable 0|1", dieselbe Regel wie wi_hat_inhalt() in den Installationsskripten) wird
+ * zur Zweitschrift. Bis 3.1.21 entstand sie nur in preupgrade.sh; ein Speichern nach dem letzten Update ging bei
+ * einem Verlust der Konfiguration verloren. Rueckgabe true, wenn sie danach inhaltsgleich daliegt.
+ */
+function wi_zweitschrift_ziehen($file)
+{
+    $z = wi_zweitschrift_pfad();
+    if ($z === '') {
+        return false;
+    }
+    clearstatcache(true, $file);
+    $inhalt = @file_get_contents($file);
+    if (!is_string($inhalt) || preg_match('/^[ \t]*enable[ \t]+[01][ \t\r]*$/mi', $inhalt) !== 1) {
+        wi_oberflaeche_log('<WARNING> Zweitschrift nicht nachgezogen: die Konfiguration traegt keine Zeile "enable 0|1".');
+        return false;
+    }
+    $tmp = $z . '.tmp.' . getmypid();
+    $geschrieben = @file_put_contents($tmp, $inhalt, LOCK_EX);
+    if ($geschrieben !== strlen($inhalt) || @file_get_contents($tmp) !== $inhalt) {
+        @unlink($tmp);
+        wi_oberflaeche_log('<WARNING> Zweitschrift ' . $z . ' liess sich nicht schreiben.');
+        return false;
+    }
+    @chmod($tmp, 0644);
+    if (!@rename($tmp, $z)) {
+        @unlink($tmp);
+        wi_oberflaeche_log('<WARNING> Zweitschrift ' . $z . ' liess sich nicht schreiben.');
+        return false;
+    }
+    return true;
+}
+
+/** Eine Zeile der Oberflaeche ins Protokoll des Dienstes (Weg wie wi_config_vervollstaendigen()); Namen, nie Werte. */
+function wi_oberflaeche_log($text)
+{
+    $p = wi_paths();
+    if ($p['home'] === '') {
+        return;
+    }
+    $log = wi_log_file('server');
+    if ($log === '' && $p['logdir'] !== ''
+        && (is_dir($p['logdir']) || @mkdir($p['logdir'], 0775, true))) {
+        $log = $p['logdir'] . '/server.log';
+    }
+    if ($log !== '') {
+        @file_put_contents($log, date('Y-m-d H:i:s') . ' ' . str_replace(array("\r", "\n"), ' ', (string) $text) . "\n",
+                           FILE_APPEND);
+    }
 }
 
 /**
@@ -1383,12 +1829,12 @@ function wi_wertpruefung_luecken()
  * fehlt hier mit Absicht: ob 3.0.8 sie schon schrieb, ist nicht gemessen, und
  * ihr Vorgabewert (keine Tabelle) ist der sichere.
  *
- * wi_konfig_einlesen() leitet daraus ab, aus welcher Fassung eine Sicherung
+ * wi_sicherung_quer() leitet daraus ab, aus welcher Fassung eine Sicherung
  * stammt (die hoechste Stufe unter ihren Schluesseln). Fehlt ihr ein
  * Schluessel, den diese Fassung schon schrieb, ist sie unvollstaendig und
- * wird abgewiesen; fehlt einer, den es damals noch nicht gab, kommt er mit
- * dem Wert hinzu, den auch die Aktualisierung eintraegt, und der Hinweis
- * nennt ihn. Ein neuer Schluessel in wi_defaults() gehoert hier mit der
+ * wird abgewiesen; fehlt einer, den es damals noch nicht gab, behaelt er seit
+ * 3.1.22 den geltenden Wert ('fehlt' => 'behalten' im Sicherungsmodul), und die
+ * Meldung nennt ihn (bis 3.1.21: die Vorgabe). Ein neuer Schluessel in wi_defaults() gehoert hier mit der
  * naechsten Stufe hinein; fehlt er hier, gilt er als nachtragbar.
  */
 function wi_sicherung_stufen()
@@ -1411,173 +1857,6 @@ function wi_sicherung_stufen()
         $s[$k] = 4;
     }
     return $s;
-}
-
-/**
- * Eine hochgeladene Sicherung pruefen und uebernehmen.
- * Rueckgabe: array(uebernommen, Liste der Beanstandungen, Sprachausgabe,
- *                  nachgetragene Schluessel als "name=wert")
- *
- * Es werden ALLE Beanstandungen gesammelt, nicht nur die erste - und eine
- * halb gueltige Datei ueberschreibt die bestehende Konfiguration NICHT.
- *
- * 3.1.21: auch eine UNVOLLSTAENDIGE nicht. Bis 3.1.20 begann die Lesung mit
- * wi_defaults(), und was in der Datei fehlte, kam still aus den Vorgaben.
- * Gemessen (Pruefung-WOLF-ISM-NG-3.1.21/sicherung_faelle.py, Fall U): eine
- * Sicherung ohne die Zeile "praefix" bei geltendem Praefix "heizung" wurde
- * angenommen, danach galt "wolf_ng" - und mit dem Praefix wanderten alle
- * MQTT-Themen. Der Durchzug vom 07.09.2026 (Regeln/05) laesst 30 Linien eine
- * unvollstaendige Sicherung abweisen; diese Linie, deren Datei kein JSON ist,
- * war nach ihrem Quelltext nicht dabei.
- */
-function wi_konfig_einlesen($roh)
-{
-    $mangel = array();
-    $neu = wi_defaults();
-    $bekannt = array_keys($neu);
-    $gefunden = 0;
-    $wi_da = array();
-    $wi_gesehen = array();
-    /* Nr. 36 b (seit 3.1.8): die Sprachausgabe (dritte Rueckgabe). */
-    $ans = array();
-    $tts_roh = null;
-    foreach (preg_split('/\R/', (string) $roh) as $z) {
-        $t = trim($z);
-        if ($t === '' || $t[0] === '#') {
-            continue;
-        }
-        if (preg_match('/^tts(?:\s+(.*))?$/i', $t, $wi_mt)) {
-            $tts_roh = isset($wi_mt[1]) ? $wi_mt[1] : '';
-            continue;
-        }
-        if (preg_match('/^ansage_regeln(?:\s+(.*))?$/i', $t, $wi_mt)) {     // 3.1.14
-            $wi_rg = '';
-            $wi_rw = ansage_regeln_wert(json_decode(isset($wi_mt[1]) ? $wi_mt[1] : '', true), $wi_rg);
-            if ($wi_rw === null) { $mangel[] = sprintf(wi_t('MELDUNG.SICH_WERT'), 'ansage_regeln', '-'); } else { $ans['ansage_regeln'] = $wi_rw; }
-            continue;
-        }
-        if (preg_match('/^ansage_token_herkunft\b/i', $t)) { continue; }     // 3.1.14: nie aus einer Datei
-        $f = preg_split('/\s+/', $t);
-        // Eine Zeile mit NUR einem Schluessel ist ein LEERER Wert, keine
-        // Beanstandung. Bis 3.0.10 fiel sie durch die Feldzahlpruefung - und
-        // weil wi_konfig_text() den leeren Vorgabewert von 'stoercodes' als
-        // "stoercodes " schreibt, lehnte das Zurueckspielen die Datei ab, die
-        // das Sichern soeben ausgeliefert hatte. Im Werkszustand, also auf
-        // jeder frischen Anlage, war der Rundlauf damit unbenutzbar.
-        if (count($f) === 1) {
-            $f[] = '';
-        }
-        if (count($f) !== 2) {
-            $mangel[] = sprintf(wi_t('MELDUNG.SICH_ZEILE'), wi_e($t));
-            continue;
-        }
-        $k = strtolower($f[0]);
-        if ($k === 'ansage_stoerung' || $k === 'ansage_ausfall') {
-            if (preg_match('/^[01]$/', $f[1]) !== 1) {
-                $mangel[] = sprintf(wi_t('MELDUNG.SICH_WERT'), wi_e($k), wi_e($f[1]));
-            } else {
-                $ans[substr($k, 7)] = $f[1];
-            }
-            continue;
-        }
-        if (!in_array($k, $bekannt, true)) {
-            $mangel[] = sprintf(wi_t('MELDUNG.SICH_SCHLUESSEL'), wi_e($k));
-            continue;
-        }
-        $wi_gesehen[$k] = true;     // 3.1.21: auch mit unzulaessigem Wert - der ist schon beanstandet, nicht "fehlend"
-        // Der WERT wird geprueft, nicht nur der Schluessel - mit derselben
-        // Positivliste, die auch der Speicher-Handler benutzt. Bis 3.0.10 kam
-        // hier alles durch, was keinen Leerraum enthielt: eine Sicherung mit
-        // "praefix ../../etc/passwd" wurde uebernommen, die Oberflaeche zeigte
-        // den Unsinn an, und der Dienst arbeitete still mit etwas anderem.
-        if (!wi_wert_taugt($k, $f[1])) {
-            $mangel[] = sprintf(wi_t('MELDUNG.SICH_WERT'), wi_e($k), wi_e($f[1]));
-            continue;
-        }
-        $neu[$k] = $f[1];
-        $wi_da[$k] = true;
-        $gefunden++;
-    }
-    if ($gefunden === 0) {
-        $mangel[] = wi_t('MELDUNG.SICH_LEER');
-    }
-    /* Gruppe 5 (3.1.12, Entwurf wo E2): eine Sicherung bis 3.1.11 kennt mqtt_zustand_schreiben nicht. Sie stammt
-     * aus einer Anlage, in der der alte Schreibweg (publish auf das Zustandsthema) ohne Haken wirkte - wie beim
-     * Update gilt er dann weiter (1). Die beiden Haken der Befehlsbruecke bleiben auf der Vorgabe (aus). */
-    if ($gefunden > 0 && !isset($wi_da['mqtt_zustand_schreiben'])) {
-        $neu['mqtt_zustand_schreiben'] = '1';
-    }
-    /* 3.1.21: fehlende Schluessel (siehe wi_sicherung_stufen() und den Kopf dieser Funktion). */
-    $wi_nachgetragen = array();
-    if ($gefunden > 0) {
-        $wi_stufen = wi_sicherung_stufen();
-        $wi_stufe = 0;
-        foreach (array_keys($wi_gesehen) as $wi_k) {
-            if (isset($wi_stufen[$wi_k]) && $wi_stufen[$wi_k] > $wi_stufe) {
-                $wi_stufe = $wi_stufen[$wi_k];
-            }
-        }
-        $wi_fehlt = array();
-        foreach (array_keys(wi_defaults()) as $wi_k) {
-            if (isset($wi_gesehen[$wi_k])) {
-                continue;
-            }
-            if (isset($wi_stufen[$wi_k]) && $wi_stufen[$wi_k] <= $wi_stufe) {
-                $wi_fehlt[] = $wi_k;
-            } else {
-                $wi_nachgetragen[] = $wi_k . '=' . $neu[$wi_k];
-            }
-        }
-        if ($wi_fehlt) {
-            $mangel[] = sprintf(wi_t('MELDUNG.SICH_FEHLT'), count($wi_fehlt), wi_e(implode(', ', $wi_fehlt)));
-        }
-    }
-    /* Nr. 36 b (seit 3.1.8): eine Sicherung dieses Plugins traegt nie ein Sprechtoken - traegt
-     * die Datei eines (auch als Liste, Zahl oder null), stammt sie nicht aus "Einstellungen
-     * sichern" und wird abgewiesen. Ausgabeart, Adresse und Vorlage wie im Formular (Heimnetz). */
-    if ($tts_roh !== null) {
-        $tj = json_decode($tts_roh, true);
-        if (!is_array($tj)) {
-            $mangel[] = wi_e(wi_t('SPRACHAUSGABE.SICH_TTS_JSON'));
-        } elseif ($tm = ansage_sicherung_mangel($tj)) {
-            $mangel[] = wi_e(sprintf(wi_t('SPRACHAUSGABE.SICH_TTS_TOKEN'), implode(', ', $tm)));
-        } else {
-            $tg = '';
-            $tp = ansage_wert_pruefen($tj, $tg, wi_ansage_modi());
-            if ($tp === null) {
-                $mangel[] = wi_e(sprintf(wi_t('SPRACHAUSGABE.SICH_TTS'),
-                                         ansage_kennung_text($tg, wi_ansage_k())));
-            } else {
-                /* Welle Mehrfach-Ziele (3.1.13): die Sicherung ERSETZT den Block - eine Sicherung ohne Liste (bis 3.1.12)
-                 * nahm die geltenden weiteren Ziele bisher still weg. Jetzt die Spaetliste: sie bleiben, und der
-                 * Handler nennt sie ('_spaet' in der dritten Rueckgabe; wi_ansage_schreiben() schreibt den Schluessel
-                 * nicht). */
-                $wi_tsneu = array('tts' => $tp);
-                $wi_tsjetzt = array('tts' => wi_tts());
-                $wi_tsspaet = array();
-                /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1, Spaetliste): fehlt die Liste der weiteren Ziele in der Sicherung (Datei einer
-                 * aelteren Fassung), gelten die jetzigen weiteren Ziele weiter - genannt im Hinweis. Eine Sicherung MIT leerer Liste
-                 * heisst "keine weiteren Ziele" und wird so uebernommen. */
-                $wi_spaete = array();
-                if (is_array($wi_tsneu['tts']) && function_exists('ansage_sicherung_spaet')) {
-                    list($wi_tsneu['tts'], $wi_spaete) = ansage_sicherung_spaet($wi_tsneu['tts'],
-                        (isset($wi_tsjetzt['tts']) && is_array($wi_tsjetzt['tts'])) ? $wi_tsjetzt['tts'] : null);
-                }
-                foreach ($wi_spaete as $wi_sn) { $wi_tsspaet[] = $wi_sn; }     // Welle Mehrfach-Ziele: tts.ziele (Spaetliste)
-                list($ans['tts']) = ansage_vervollstaendigen($wi_tsneu['tts'], 'aus');
-                if ($wi_tsspaet) { $ans['_spaet'] = $wi_tsspaet; }
-            }
-        }
-    }
-    // O4 (Durchgang 02.10.2026): dieselben Querpruefungen wie das Formular.
-    // Bis 3.1.5 wurde eine Sicherung mit Ladesollwert unter dem Normalwert
-    // uebernommen (Bericht oberflaeche, O4).
-    if (!$mangel) {
-        foreach (wi_sg_querpruefung($neu) as $q) {
-            $mangel[] = $q[1];
-        }
-    }
-    return array($mangel ? null : $neu, $mangel, $mangel ? null : $ans, $mangel ? array() : $wi_nachgetragen);
 }
 
 /**
@@ -2062,31 +2341,9 @@ function wi_mqtt_feste_themen()
  */
 function wi_sicherung_maengel($cfg)
 {
-    $aus = array();
-    $voll = array();
-    foreach (wi_defaults() as $k => $v) {
-        $w = isset($cfg[$k]) && $cfg[$k] !== '' ? (string) $cfg[$k] : $v;
-        $voll[$k] = $w;
-        if (!wi_wert_taugt($k, $w)) {
-            $aus[] = $k;
-        }
-    }
-    if (!$aus) {
-        foreach (wi_sg_querpruefung($voll) as $q) {
-            $aus[] = $q[0];
-        }
-    }
-    /* Nr. 36 b (seit 3.1.8): die Sprachausgabe - Namen, nie Werte, nie ein Token. */
-    $a = wi_ansage_lesen();
-    foreach (ansage_sicherung_x3($a['tts'], wi_ansage_modi()) as $n) {
-        $aus[] = $n;
-    }
-    foreach (wi_ansage_anlaesse() as $n) {
-        if ($a[$n] !== '0' && $a[$n] !== '1') {
-            $aus[] = 'ansage_' . $n;
-        }
-    }
-    return array_values(array_unique($aus));
+    /* 3.1.22: dieselbe Pruefung wie beim Zurueckspielen (sicherung_selbstpruefung() des Moduls) an genau der Datei,
+     * die "Einstellungen sichern" liefern wuerde - Einstellungen und Sprachausgabe, Namen, nie Werte, nie ein Token. */
+    return sicherung_selbstpruefung(wi_sicherung_beschreibung(), wi_sicherung_daten($cfg), $cfg);
 }
 
 /** Die Themen des SG-Moduls (ohne Praefix). Seit 3.1.4 alle fluechtig. */

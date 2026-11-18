@@ -280,78 +280,58 @@ if ($wi_post && isset($_POST['download'])) {
 
 /* ============ Einstellungen sichern (V17, X-3) ============
  *
- * X-3 (Durchgang 02.10.2026, Bauliste O6): die Sicherung geht immer
- * vollstaendig hinaus. Wuerde das Zurueckspielen sie abweisen, steht in der
- * Datei eine Kommentarzeile "# _warnung: ..." mit den SCHLUESSELNAMEN (nie
- * den Werten), und am Knopf steht eine gelbe Warnung (Bauform EVCC Nr. 13).
- * Bis 3.1.5 merkte man erst auf dem neuen LoxBerry, dass sie wertlos war. */
+ * 3.1.22: ueber das gemeinsame Sicherungsmodul - eine JSON-Datei mit lesbarem Kopf (_hinweis, _plugin, _fassung,
+ * _stand), den Einstellungen und der Sprachausgabe ohne Sprechtoken (wi_sicherung_json()). X-3 wie bisher: die
+ * Sicherung geht immer vollstaendig hinaus; wuerde das Zurueckspielen sie abweisen, nennt der Kopf _warnung die
+ * Namen (nie die Werte), und am Knopf steht eine gelbe Warnung. Bis 3.1.21 eine Textdatei im Format der
+ * Konfiguration mit einer Kommentarzeile "# _warnung". */
 if ($wi_post && isset($_POST['sichern'])) {
-    $wi_scfg = wi_config_read();
-    $txt = wi_konfig_text($wi_scfg);
-    $wi_swarn = wi_sicherung_maengel($wi_scfg);
-    if ($wi_swarn) {
-        $txt = '# _warnung: Diese Einstellungen wuerden beim Zurueckspielen abgewiesen: '
-             . implode(', ', $wi_swarn) . "\n" . $txt;
+    $txt = wi_sicherung_json(wi_config_read());
+    if ($txt === '') {
+        $wi_error = wi_e(wi_t('MELDUNG.SICH_NICHT_GEBAUT'));
+    } else {
+        while (ob_get_level() > 0) { @ob_end_clean(); }
+        header('Content-Type: application/x-download');
+        header('Content-Disposition: attachment; filename="wolf_ism_ng_einstellungen.json"');
+        header('Content-Length: ' . strlen($txt));
+        echo $txt;
+        exit;
     }
-    while (ob_get_level() > 0) { @ob_end_clean(); }
-    header('Content-Type: application/x-download');
-    header('Content-Disposition: attachment; filename="wolf_ism8i_einstellungen.txt"');
-    header('Content-Length: ' . strlen($txt));
-    echo $txt;
-    exit;
 }
 
-/* ============ Einstellungen zurueckspielen (V17) ============ */
+/* ============ Einstellungen zurueckspielen (V17) ============
+ *
+ * 3.1.22: den Eingang prueft das gemeinsame Sicherungsmodul (sicherung_eingang()) - in jeder Linie gleich: zuerst
+ * der Haken zurueck_ok (ohne ihn wird nichts gelesen und nichts geaendert), dann is_uploaded_file() und die
+ * Groessengrenze des Moduls (256 KB). Eine alte Textsicherung (3.0.9 bis 3.1.21) wandelt wi_sicherung_aus_text()
+ * vorweg in die JSON-Form dieser Fassung (Entscheidung des Hausherrn 18.11.2026, "Linie wandelt vorweg um"), ebenso
+ * eine hochgeladene wolf_ism8i.conf (Frage 38 der Nacht 18.11.2026: bis 3.1.21 nahm das Zurueckspielen sie an); jeder
+ * andere Text geht unveraendert ans Modul und wird als "keine lesbare Sicherung" abgewiesen. Dass umgewandelt wurde,
+ * sagt seit Modul 1.2.11 das Modul selbst (K_AUS_TEXT, Regel 21; bis dahin der eigene Satz
+ * MELDUNG.SICH_TEXT_UMGEWANDELT, wie Kodi-NG und Smartmeter-classic). Fuer eine wolf_ism8i.conf bleibt der eigene Satz
+ * MELDUNG.SICH_CONF_UMGEWANDELT: nur er sagt, dass die Sprachausgabe nicht darin steht und bleibt. Lesen, Pruefen,
+ * Speichern (wi_sicherung_speichern(): Konfiguration samt Zweitschrift, Sprachausgabe), Zweitschrift messen, Dienst
+ * nachziehen und die Protokollzeile macht sicherung_zurueckspielen(): Unbekanntes wird verworfen und mit Namen
+ * genannt, ein leerer Wert laesst den bisherigen stehen, eine halb gueltige Datei aendert GAR NICHTS (alle
+ * Beanstandungen gesammelt). Die Saetze des Moduls sind schon maskiert und gehen roh in die Einmalmeldung. Bis
+ * 3.1.21 stand hier eine eigene Lesefunktion mit 64 kB Grenze und ohne Haken. */
 if ($wi_post && isset($_POST['laden'])) {
     $wi_tab = 'tab-settings';
-    /* O8 (Durchgang 02.10.2026): tmp_name muss eine Zeichenkette sein. Ein
-     * Feld "sicherung[]" ergab bis 3.1.5 unter PHP 8 einen TypeError in
-     * is_uploaded_file() und HTTP 500 (Bericht oberflaeche, O8). */
-    $wi_up = isset($_FILES['sicherung']) && is_array($_FILES['sicherung']) ? $_FILES['sicherung'] : null;
-    if ($wi_up === null || !isset($wi_up['tmp_name']) || !is_string($wi_up['tmp_name'])
-        || is_array($wi_up['tmp_name']) || !isset($wi_up['size']) || !is_scalar($wi_up['size'])
-        || !@is_uploaded_file($wi_up['tmp_name'])) {
-        $wi_error = wi_t('MELDUNG.SICH_KEINE_DATEI');
-    } elseif ((int) $wi_up['size'] > 65536) {
-        $wi_error = wi_t('MELDUNG.SICH_ZU_GROSS');
-    } else {
-        $roh = (string) @file_get_contents($wi_up['tmp_name']);
-        list($neu, $mangel, $wi_ans_s, $wi_sich_nach) = wi_konfig_einlesen($roh);
-        if ($neu === null) {
-            // Eine halb gueltige Datei ueberschreibt NICHTS.
-            $wi_beanstandungen = $mangel;
-            $wi_error = wi_t('MELDUNG.SICH_ABGELEHNT');
-        } elseif (wi_config_write($neu)) {
-            $wi_saved = true;
-            $wi_hinweis = wi_t('MELDUNG.SICH_UEBERNOMMEN') . ' ' . wi_dienst_uebernehmen($neu, null);
-            /* 3.1.21: eine Sicherung aus einer frueheren Fassung - was sie nicht kennt, steht mit Namen und Wert da. */
-            if ($wi_sich_nach) {
-                $wi_hinweise[] = wi_e(sprintf(wi_t('MELDUNG.SICH_NACHGETRAGEN'), implode(', ', $wi_sich_nach)));
-            }
-            // Gruppe 5 (3.1.12): Abo-Datei und Befehlsbruecke folgen der zurueckgespielten Einstellung.
-            wi_abo_datei(wi_cfg($neu, 'praefix', 'wolf_ng'), true);
-            $wi_bm = wi_bruecke_meldung(wi_bruecke_schalten(true));
-            if ($wi_bm !== '') {
-                $wi_hinweise[] = $wi_bm;
-            }
-            /* Nr. 36 b (seit 3.1.8): die Sprachausgabe aus der Sicherung. Fehlt sie (Sicherung
-             * vor 3.1.8), gelten ihre Vorgaben - wie fuer jeden anderen fehlenden Schluessel. Die
-             * Sprechtoken traegt keine Sicherung: die geltenden bleiben. 3.1.14: Was die Datei nicht traegt, bleibt, wie es gilt (die Vorgaben waeren jetzt EIN, ein bewusstes AUS ginge verloren). */
-            $wi_ajetzt = wi_ansage_lesen();
-            $wi_aneu = $wi_ajetzt;
-            foreach ((array) $wi_ans_s as $wi_ak => $wi_aw) {
-                $wi_aneu[$wi_ak] = $wi_aw;
-            }
-            $wi_aneu['tts'] = ansage_sicherung_tokens_behalten($wi_aneu['tts'], $wi_ajetzt['tts']);
-            if (!wi_ansage_schreiben($wi_aneu)) {
-                $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e(wi_ansage_datei()));
-            } elseif (!empty($wi_aneu['_spaet'])) {     // Welle Mehrfach-Ziele (3.1.13): Spaetliste (tts.ziele)
-                $wi_hinweise[] = wi_e(sprintf(wi_t('SPRACHAUSGABE.SICH_SPAET'), implode(', ', (array) $wi_aneu['_spaet'])));
-            }
-        } else {
-            $wi_error = sprintf(wi_t('MELDUNG.SCHREIBFEHLER'), wi_e($wi_p['config']));
-        }
+    $wi_sb = wi_sicherung_zum_zurueckspielen();
+    list($wi_sroh, $wi_sab) = sicherung_eingang($wi_sb, $_POST, $_FILES, 'sicherung');
+    $wi_sart = '';
+    $wi_sr = $wi_sab !== null ? $wi_sab : sicherung_zurueckspielen($wi_sb, wi_sicherung_aus_text($wi_sroh, $wi_sart));
+    $wi_sm = sicherung_meldungen($wi_sb, $wi_sr);
+    if ($wi_sm['fehler']) {
+        $wi_error = implode(' ', $wi_sm['fehler']);
     }
+    foreach ($wi_sm['hinweise'] as $wi_x) {
+        $wi_hinweise[] = $wi_x;
+    }
+    if (!empty($wi_sr['ok']) && $wi_sart === 'conf') {
+        $wi_hinweise[] = wi_e(wi_t('MELDUNG.SICH_CONF_UMGEWANDELT'));
+    }
+    $wi_saved = !empty($wi_sr['gespeichert']);
 }
 
 /* ============ Speichern: SG-Ready - eigener Handler (V24) ============
@@ -1181,8 +1161,9 @@ $wi_ans = wi_ansage_lesen(); ?>
 <form method="post" action="index.php" enctype="multipart/form-data">
 <input data-role="none" type="hidden" name="activetab" value="tab-settings"><?= wi_fmt() ?>
 <label><?= wi_t('EINST.LADEN_DATEI') ?></label>
-<input data-role="none" type="file" name="sicherung" accept=".txt,.conf,text/plain">
+<input data-role="none" type="file" name="sicherung" accept=".json,.txt,application/json,text/plain">
 <div class="sm-small"><?= wi_t('EINST.LADEN_HINT') ?></div>
+<?= sicherung_haken_zeile(wi_sicherung_beschreibung()) ?>
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="laden" value="1"><?= wi_t('EINST.LADEN') ?></button>
 </form>
 </div>

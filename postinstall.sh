@@ -84,6 +84,10 @@ netz_zurueck() {
             echo "<WARNING> Die Zweitschrift $zweit traegt keinen Inhalt -"
             echo "<WARNING> $datei wurde NICHT zurueckgespielt; es gilt die Vorgabe."
         elif cp -p "$zweit" "$ziel" 2>/dev/null && cmp -s "$zweit" "$ziel"; then
+            # 3.1.22 (Frage 39 der Nacht 18.11.2026): Konfiguration und Zweitschrift tragen die Rechte, mit denen
+            # wi_config_write() die Konfiguration schreibt (0644; der Dienst liest als loxberry, die Datei traegt weder
+            # Zugangsdaten noch Token). Bis dahin trug cp -p die 0600 einer Zweitschrift aus preupgrade.sh hierher.
+            chmod 644 "$ziel" "$zweit" 2>/dev/null
             echo "<OK> $datei aus der Zweitschrift wiederhergestellt."
         else
             echo "<WARNING> $datei liess sich nicht zurueckspielen. Die Sicherung"

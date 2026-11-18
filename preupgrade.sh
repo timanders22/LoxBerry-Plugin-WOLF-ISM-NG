@@ -79,6 +79,10 @@ fi
 # ---------- Update-Schutz (05.11.2026, Bauart Govee 0.9.34) ----------
 # plugininstall.pl bricht nur bei Rueckgabewert >1 vor purge_installation ab. Die Kopie entsteht als <Ziel>.neu.<pid>, traegt 0600,
 # BEVOR Inhalt hineinkommt, wird mit cmp verglichen und erst dann per mv an ihren Platz gestellt: eine heile Sicherung bleibt heil.
+# 3.1.22 (Entscheidung des Hausherrn 18.11.2026, Frage 39 der Nacht: "Ich folge deinen Empfehlungen"; CLAUDE.md 9): vor
+# dem mv bekommt die Kopie die Rechte ihres Originals (chmod --reference). Bis dahin blieb sie 0600, waehrend
+# wi_config_write() die Konfiguration mit 0644 schreibt und wi_zweitschrift_ziehen() die Zweitschrift ebenso -
+# zwei Rechte fuer dieselbe Datei, und postinstall.sh trug die 0600 mit cp -p auf die Konfiguration zurueck.
 ZS_FEHL=""
 zs_hinlegen() {   # $1 Quelle, $2 Ziel
     [ -d "$2" ] && return 1
@@ -86,6 +90,7 @@ zs_hinlegen() {   # $1 Quelle, $2 Ziel
     rm -f "$zs_neu" 2>/dev/null
     if { : > "$zs_neu"; } 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
        && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
+       && chmod --reference="$1" "$zs_neu" 2>/dev/null \
        && mv -f "$zs_neu" "$2" 2>/dev/null; then
         return 0
     fi
@@ -211,7 +216,8 @@ fi
 
 # I3 (Durchgang 02.10.2026): eine eigene Zweitschrift fuer die eigene
 # Stoercodetabelle, neben dem Konfigurationsordner, mit denselben Rechten
-# wie das Original (cp -p). Gibt es keine eigene Tabelle mehr, faellt eine
+# wie das Original (seit 3.1.22 zs_hinlegen() mit chmod --reference; bis
+# dahin stand hier "cp -p", die Kopie trug aber 0600). Gibt es keine eigene Tabelle mehr, faellt eine
 # alte Zweitschrift weg (Entscheidung 1: nie einen Bestand aus einem
 # frueheren Vorgang einspielen).
 WI_CSV_Z="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_stoercodes.csv"
