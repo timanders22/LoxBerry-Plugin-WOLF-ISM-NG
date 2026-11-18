@@ -2157,6 +2157,8 @@ sub loadConfig
    } else {
      LOGINF("   Config file not found, creating new config file.");
      open(my $fh, '>:encoding(UTF-8)', $file) or die "Could not open/write file '$file' $!";
+     # 3.1.23 (Frage 50): 0600 vor dem Inhalt, wie wi_config_write(); der Dienst laeuft als loxberry.
+     chmod 0600, $file;
 
      print $fh "######################################################################################################################################################\n";
      print $fh "#Config Datei laden und Werte zwischenspeichern. Wenn keine Config Datei vorhanden ist wird eine angelegt.\n";

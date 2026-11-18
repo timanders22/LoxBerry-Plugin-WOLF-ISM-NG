@@ -26,47 +26,23 @@
 # Diese Datei ist eine DATEI, kein Verzeichnis. LoxBerry fuehrt in
 # system/cron/cron.05min/ nur Dateien aus.
 
+# Upgrade-Marke (Regeln/06, Entscheidung des Hausherrn 18.11.2026, Frage 60; Bauart Renault-NG 2.1.37):
+# waehrend einer Aktualisierung ruht dieser Takt. preupgrade.sh legt die Marke neben dem Datenordner
+# mit der Unixzeit an, postinstall.sh oder postupgrade.sh entfernt sie. Ist sie juenger als 3600 s,
+# endet der Takt hier still, vor jedem Schreiben. Eine Marke, die 3600 s oder aelter ist, in der Zukunft
+# liegt oder keine Unixzeit enthaelt, gilt nicht - eine abgebrochene Aktualisierung legt den Takt nicht
+# fuer immer still. Liefert die Uhr keine Zahl, gilt die Marke (geschlossen ausfallen).
+UPGM_MARKE="REPLACELBPDATADIR.upgrade_laeuft"
+if [ -f "$UPGM_MARKE" ]; then
+    upgm_jetzt=$(date +%s 2>/dev/null); upgm_seit=$(cat "$UPGM_MARKE" 2>/dev/null)
+    case "$upgm_seit" in ''|*[!0-9]*) upgm_seit=0 ;; esac
+    case "$upgm_jetzt" in ''|*[!0-9]*|0) exit 0 ;; esac
+    if [ "$upgm_seit" -le "$upgm_jetzt" ] && [ $((upgm_jetzt - upgm_seit)) -lt 3600 ]; then exit 0; fi
+fi
+
 BINPATH="REPLACELBPBINDIR"
 CONFIG="REPLACELBPCONFIGDIR/wolf_ism8i.conf"
 
-# --- Laeuft gerade eine Aktualisierung dieses Plugins? ---
-#
-# preupgrade.sh legt die Marke als Erstes neben den Datenordner des Plugins,
-# postupgrade.sh entfernt sie nach dem Dienststart. Der Ordnerpfad kommt aus
-# dem Platzhalter, den der Installer beim Einbau ersetzt.
-#
-# Diese Frage steht ABSICHTLICH vor der nach dem Schalter: in der Luecke ist
-# die Konfiguration weggeraeumt, und auch der SG-Ready-Lauf weiter unten soll
-# dann nicht an die Heizung schreiben.
-#
-# Nur eine Marke, die hoechstens eine Stunde alt ist, zaehlt. Aelter, mehr als
-# 300 s aus der Zukunft oder unlesbar: eine abgebrochene Installation hat sie
-# liegen lassen, und das Plugin darf nicht fuer immer stillstehen.
-MARKE="REPLACELBPDATADIR.upgrade_laeuft"
-if [ -f "$MARKE" ]; then
-    SEIT=$(cat "$MARKE" 2>/dev/null)
-    case "$SEIT" in
-        ''|*[!0-9]*) SEIT="" ;;
-    esac
-    if [ -n "$SEIT" ]; then
-        # Die Uhr wird gemessen, nicht angenommen: liefert "date" nichts -
-        # unter Last kann ein fork scheitern -, dann rechnet die Schale mit
-        # einer leeren Zeichenkette, das Alter wird negativ, die Bedingung
-        # faellt durch, und der Waechter startet MITTEN in der
-        # Aktualisierung. Ein Schutz faellt geschlossen aus (Regeln/01):
-        # ohne Uhr gilt die Marke. Dieselbe Stelle steht in bin/wolf_server.
-        JETZT=$(date +%s 2>/dev/null)
-        case "$JETZT" in
-            ''|*[!0-9]*) exit 0 ;;
-        esac
-        ALTER=$(( JETZT - SEIT ))
-        # Bis 300 s "Zukunft" gilt sie noch (Muster 8 der Nachlese, Fall W9):
-        # die Uhr kann nach dem Setzen ein Stueck zurueckspringen.
-        if [ "$ALTER" -ge -300 ] && [ "$ALTER" -lt 3600 ]; then
-            exit 0
-        fi
-    fi
-fi
 
 # --- Konfiguration vervollstaendigen (seit 3.1.20, Regeln/05) ---
 #

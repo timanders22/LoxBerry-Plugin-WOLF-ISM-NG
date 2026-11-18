@@ -85,9 +85,10 @@ netz_zurueck() {
             echo "<WARNING> $datei wurde NICHT zurueckgespielt; es gilt die Vorgabe."
         elif cp -p "$zweit" "$ziel" 2>/dev/null && cmp -s "$zweit" "$ziel"; then
             # 3.1.22 (Frage 39 der Nacht 18.11.2026): Konfiguration und Zweitschrift tragen die Rechte, mit denen
-            # wi_config_write() die Konfiguration schreibt (0644; der Dienst liest als loxberry, die Datei traegt weder
-            # Zugangsdaten noch Token). Bis dahin trug cp -p die 0600 einer Zweitschrift aus preupgrade.sh hierher.
-            chmod 644 "$ziel" "$zweit" 2>/dev/null
+            # wi_config_write() die Konfiguration schreibt. Seit 3.1.23 (Frage 50, Entscheidung des Hausherrn
+            # 18.11.2026) sind das 0600 wie bei den Konfigurationen der uebrigen Plugins; alle Leser und Schreiber
+            # laufen als loxberry. In 3.1.22 durfte jeder Benutzer beide Dateien lesen.
+            chmod 600 "$ziel" "$zweit" 2>/dev/null
             echo "<OK> $datei aus der Zweitschrift wiederhergestellt."
         else
             echo "<WARNING> $datei liess sich nicht zurueckspielen. Die Sicherung"
@@ -99,6 +100,19 @@ if [ -z "$NETZ_BASE" ] || [ ! -d "$NETZ_BASE/config/plugins" ]; then
     echo "<WARNING> Die LoxBerry-Wurzel ('$NETZ_BASE') traegt kein config/plugins -"
     echo "<WARNING> die Zweitschrift wurde nicht geprueft."
     exit 1
+fi
+# 3.1.23 (Frage 50, Entscheidung des Hausherrn 18.11.2026): die Konfiguration traegt 0600 wie die Konfigurationen der
+# uebrigen Plugins (am Geraet gemessen: 38 von 39 loxberry:loxberry 0600). Aus dem Archiv kommt sie mit 0644 an und
+# bliebe so bis zum ersten Speichern - bei einer Neuinstallation wie bei einem Update. Alle Leser und Schreiber laufen
+# als loxberry (Apache; bin/wolf_server steigt als root selbst ab; die Takte rufen PHP ueber su loxberry);
+# daemon/daemon liest als root.
+NETZ_DATEI="$NETZ_CFG/wolf_ism8i.conf"
+if [ -f "$NETZ_DATEI" ]; then
+    if chmod 600 "$NETZ_DATEI" 2>/dev/null; then
+        echo "<INFO> Rechte der Konfiguration: 0600."
+    else
+        echo "<WARNING> Die Rechte von $NETZ_DATEI liessen sich nicht auf 0600 setzen."
+    fi
 fi
 # Die Pruefsumme der mitgelieferten Vorgabe wird GERECHNET, nicht
 # eingetragen. Bis 3.0.10 stand sie als Zeichenkette hier; wer

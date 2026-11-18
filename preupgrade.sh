@@ -83,14 +83,18 @@ fi
 # dem mv bekommt die Kopie die Rechte ihres Originals (chmod --reference). Bis dahin blieb sie 0600, waehrend
 # wi_config_write() die Konfiguration mit 0644 schreibt und wi_zweitschrift_ziehen() die Zweitschrift ebenso -
 # zwei Rechte fuer dieselbe Datei, und postinstall.sh trug die 0600 mit cp -p auf die Konfiguration zurueck.
+# 3.1.23 (Frage 50, Entscheidung des Hausherrn 18.11.2026): ein drittes Argument setzt die Rechte ausdruecklich. Die
+# Zweitschrift der Konfiguration bekommt 600 wie die Konfiguration selbst (wi_config_write(), postinstall.sh,
+# postupgrade.sh); bei einem Update von 3.1.22 oder frueher traegt das Original noch 0644. Die eigene
+# Stoercodetabelle behaelt die Rechte ihres Originals.
 ZS_FEHL=""
-zs_hinlegen() {   # $1 Quelle, $2 Ziel
+zs_hinlegen() {   # $1 Quelle, $2 Ziel, $3 Rechte (leer: die des Originals)
     [ -d "$2" ] && return 1
     zs_neu="$2.neu.$$"
     rm -f "$zs_neu" 2>/dev/null
     if { : > "$zs_neu"; } 2>/dev/null && chmod 600 "$zs_neu" 2>/dev/null \
        && cp "$1" "$zs_neu" 2>/dev/null && cmp -s "$1" "$zs_neu" \
-       && chmod --reference="$1" "$zs_neu" 2>/dev/null \
+       && { if [ -n "${3:-}" ]; then chmod "$3" "$zs_neu"; else chmod --reference="$1" "$zs_neu"; fi; } 2>/dev/null \
        && mv -f "$zs_neu" "$2" 2>/dev/null; then
         return 0
     fi
@@ -182,6 +186,12 @@ if ! { cp -p -r "$PCONFIG/." "$SICHERUNG/" 2>/dev/null && diff -rq "$PCONFIG" "$
     echo "<WARNING> Die Konfiguration liess sich nicht vollstaendig sichern ($SICHERUNG)."
     ZS_FEHL="$ZS_FEHL Konfiguration"
 fi
+# 3.1.23 (Frage 50): die Sicherung der Konfiguration traegt 0600 wie die Konfiguration. Bei einem Update von 3.1.22
+# oder frueher kommt sie mit den 0644 des Originals an, und postupgrade.sh spielt sie mit cp -p zurueck.
+if [ -f "$SICHERUNG/wolf_ism8i.conf" ]; then
+    chmod 600 "$SICHERUNG/wolf_ism8i.conf" 2>/dev/null \
+        || echo "<WARNING> Die Rechte der Sicherung $SICHERUNG/wolf_ism8i.conf liessen sich nicht auf 0600 setzen."
+fi
 
 
 # ==== NETZ-EINSTELLUNGEN-UPDATE (automatisch eingefuegt, nicht doppeln) ====
@@ -203,7 +213,7 @@ NETZ_PDIR="$WI_PDIR"
 NETZ_CFG="$NETZ_BASE/config/plugins/$NETZ_PDIR"
 NETZ_ZWEIT="$NETZ_BASE/config/plugins/$NETZ_PDIR.backup.wolf_ism8i.conf"
 if wi_hat_inhalt "$NETZ_CFG/wolf_ism8i.conf"; then
-    if zs_hinlegen "$NETZ_CFG/wolf_ism8i.conf" "$NETZ_ZWEIT"; then
+    if zs_hinlegen "$NETZ_CFG/wolf_ism8i.conf" "$NETZ_ZWEIT" 600; then
         echo "<INFO> Zweitschrift der Einstellungen angelegt."
     else
         echo "<WARNING> Die Zweitschrift $NETZ_ZWEIT liess sich nicht anlegen."

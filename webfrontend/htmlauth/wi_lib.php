@@ -510,17 +510,21 @@ function wi_config_write($cfg)
      * Fehlschlag, und die Nebendatei wird dann entfernt. Bis 3.1.5 blieb
      * nach jedem gescheiterten Speichern wolf_ism8i.conf.tmp.<pid> im
      * Konfigordner liegen (Bericht code, Befund 12). */
+    @touch($tmp);
+    @chmod($tmp, 0600);   // 3.1.23 (Frage 50): Rechte vor dem Inhalt
     $geschrieben = @file_put_contents($tmp, $txt, LOCK_EX);
     if ($geschrieben !== strlen($txt)) {
         @unlink($tmp);
         return false;
     }
-    /* 0644 wie bisher. Gemessen 18.11.2026 am Code: der Dienst laeuft als loxberry (bin/wolf_server:103,
-     * daemon/daemon:91, cron/cron.05min:223), lesen koennte er also auch 0600. Die Datei traegt aber weder
-     * Zugangsdaten noch ein Token (wi_defaults()). Seit der Angleichung vom 18.11.2026 (Frage 39 der Nacht) tragen
-     * die Zweitschrift und jede Wiederherstellung dieselben Rechte: wi_zweitschrift_ziehen() 0644, preupgrade.sh die
-     * Rechte des Originals (chmod --reference), postinstall.sh 0644 nach dem Zurueckspielen. */
-    @chmod($tmp, 0644);
+    /* 3.1.23 (Frage 50, Entscheidung des Hausherrn 18.11.2026): 0600 wie die Konfigurationen der uebrigen Plugins (am
+     * Geraet gemessen: Apache laeuft als loxberry, 38 von 39 Plugin-Konfigurationen loxberry:loxberry 0600). Alle
+     * Leser und Schreiber laufen als loxberry (bin/wolf_server steigt als root selbst ab, die Takte rufen PHP ueber
+     * su loxberry); daemon/daemon liest als root. Die Datei traegt weder Zugangsdaten noch ein Token (wi_defaults()).
+     * Dieselben Rechte tragen die Zweitschrift (wi_zweitschrift_ziehen(), preupgrade.sh) und jede Wiederherstellung
+     * (postinstall.sh, postupgrade.sh); eine fehlende Datei legt loadConfig() in wolf_ism8i.pl mit 0600 an. Bis 3.1.22
+     * durfte jeder Benutzer die Datei lesen. */
+    @chmod($tmp, 0600);
     if (!@rename($tmp, $file)) {
         @unlink($tmp);
         return false;
@@ -565,7 +569,7 @@ function wi_config_write($cfg)
  *    Doppelkreuz beginnt, mit ihm anfaengt (ohne Ruecksicht auf Gross- und
  *    Kleinschreibung, wie wi_config_read() und loadConfig() lesen);
  *  - Zeilenende der Datei bleibt, Weg wie wi_config_write(): Nebendatei mit
- *    der Prozessnummer, Laengenvergleich, 0644, rename(); seit 3.1.22 zieht
+ *    der Prozessnummer, Laengenvergleich, 0600 (bis 3.1.22 fuer alle lesbar), rename(); seit 3.1.22 zieht
  *    es die Zweitschrift mit (wi_zweitschrift_ziehen()), wie jedes Speichern;
  *  - geschrieben wird nur, wenn etwas fehlt; dann eine Protokollzeile im
  *    Protokoll des Dienstes mit den Namen, nie mit Werten.
@@ -618,12 +622,14 @@ function wi_config_vervollstaendigen()
         $neu .= rtrim($k . ' ' . $v) . $eol;
     }
     $tmp = $file . '.tmp.' . getmypid();
+    @touch($tmp);
+    @chmod($tmp, 0600);   // 3.1.23 (Frage 50): Rechte vor dem Inhalt
     $geschrieben = @file_put_contents($tmp, $neu, LOCK_EX);
     if ($geschrieben !== strlen($neu)) {
         @unlink($tmp);
         return array('stand' => 'fehler', 'schluessel' => array_keys($fehlend));
     }
-    @chmod($tmp, 0644);
+    @chmod($tmp, 0600);
     if (!@rename($tmp, $file)) {
         @unlink($tmp);
         return array('stand' => 'fehler', 'schluessel' => array_keys($fehlend));
@@ -1649,7 +1655,7 @@ function wi_zweitschrift_pfad()
 }
 
 /**
- * Die Zweitschrift nachziehen: byte-gleich mit der eben geschriebenen Konfiguration, dieselben Rechte (0644, siehe
+ * Die Zweitschrift nachziehen: byte-gleich mit der eben geschriebenen Konfiguration, dieselben Rechte (0600, siehe
  * wi_config_write()), unteilbar (Nebendatei mit der Prozessnummer, Laengen- und Inhaltsvergleich, rename()). Nur
  * eine Datei MIT Inhalt (Zeile "enable 0|1", dieselbe Regel wie wi_hat_inhalt() in den Installationsskripten) wird
  * zur Zweitschrift. Bis 3.1.21 entstand sie nur in preupgrade.sh; ein Speichern nach dem letzten Update ging bei
@@ -1668,13 +1674,15 @@ function wi_zweitschrift_ziehen($file)
         return false;
     }
     $tmp = $z . '.tmp.' . getmypid();
+    @touch($tmp);
+    @chmod($tmp, 0600);   // 3.1.23 (Frage 50): Rechte vor dem Inhalt
     $geschrieben = @file_put_contents($tmp, $inhalt, LOCK_EX);
     if ($geschrieben !== strlen($inhalt) || @file_get_contents($tmp) !== $inhalt) {
         @unlink($tmp);
         wi_oberflaeche_log('<WARNING> Zweitschrift ' . $z . ' liess sich nicht schreiben.');
         return false;
     }
-    @chmod($tmp, 0644);
+    @chmod($tmp, 0600);
     if (!@rename($tmp, $z)) {
         @unlink($tmp);
         wi_oberflaeche_log('<WARNING> Zweitschrift ' . $z . ' liess sich nicht schreiben.');

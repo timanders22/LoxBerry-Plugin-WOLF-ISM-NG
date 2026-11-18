@@ -106,6 +106,13 @@ fi
 # Die Marke aus preupgrade.sh. Dieses Skript ist das LETZTE Hakenskript
 # dieser Linie: preroot, preupgrade, postinstall, postupgrade - ein
 # postroot.sh gibt es hier nicht.
+# 3.1.23 (Frage 50, Entscheidung des Hausherrn 18.11.2026): Konfiguration und Zweitschrift tragen 0600. Die
+# Sicherung kommt oben mit cp -p zurueck; eine Zweitschrift aus 3.1.22 oder frueher trug 0644.
+for WI_R in "$WI_CONF" "$WI_BASE/config/plugins/$PDIR.backup.wolf_ism8i.conf"; do
+    [ -f "$WI_R" ] || continue
+    chmod 600 "$WI_R" 2>/dev/null || echo "<WARNING> Die Rechte von $WI_R liessen sich nicht auf 0600 setzen."
+done
+
 WI_MARKE="$WI_BASE/data/plugins/$PDIR.upgrade_laeuft"
 
 enabled=$(awk '/^enable[ \t]/{print $2}' "$PCONFIG/wolf_ism8i.conf" 2>/dev/null)
