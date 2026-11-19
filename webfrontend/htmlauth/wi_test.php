@@ -181,6 +181,32 @@ function wi_pruefzeilen($cfg)
                             : sprintf(wi_t('PZ.KONFIG_OK'), count($soll)));
     }
 
+    /* --- Rechte von Konfiguration und Zweitschrift (3.1.24, Frage 87) -----
+     *
+     * Gemessen wird die echte Datei (stat ueber fileperms()), nicht der
+     * Rueckgabewert eines chmod(). Erwartet 0600 (seit 3.1.23, Frage 50).
+     * Fehlt eine Datei, ist das eine eigene Aussage mit Strich - kein Haken,
+     * denn gemessen wurde nichts; ob die Konfiguration fehlt, sagt die Zeile
+     * darueber. Ohne LoxBerry-Ordner gibt es keine Zweitschrift. */
+    foreach (array(array('PZ.RECHTE_KONFIG', $p['config']), array('PZ.RECHTE_ZWEIT', wi_zweitschrift_pfad())) as $wi_rf) {
+        $wi_rd = (string) $wi_rf[1];
+        clearstatcache(true, $wi_rd);
+        if ($wi_rd === '') {
+            $z[] = array(-1, wi_t($wi_rf[0]), wi_t('PZ.RECHTE_OHNE_WURZEL'));
+        } elseif (!is_file($wi_rd)) {
+            $z[] = array(-1, wi_t($wi_rf[0]), sprintf(wi_t('PZ.RECHTE_FEHLT'), $wi_rd));
+        } else {
+            $wi_rr = @fileperms($wi_rd);
+            if ($wi_rr === false) {
+                $z[] = array(-1, wi_t($wi_rf[0]), sprintf(wi_t('PZ.RECHTE_UNLESBAR'), $wi_rd));
+            } elseif (($wi_rr & 07777) === 0600) {
+                $z[] = array(1, wi_t($wi_rf[0]), sprintf(wi_t('PZ.RECHTE_OK'), $wi_rd));
+            } else {
+                $z[] = array(0, wi_t($wi_rf[0]), sprintf(wi_t('PZ.RECHTE_FALSCH'), $wi_rd, sprintf('%04o', $wi_rr & 07777)));
+            }
+        }
+    }
+
     // --- Das Zustandsabbild ----------------------------------------------
     if ($zu === null) {
         $z[] = array(-1, wi_t('PZ.ABBILD'), wi_t('PZ.ABBILD_KEINS'));
