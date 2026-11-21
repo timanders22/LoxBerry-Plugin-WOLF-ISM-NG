@@ -10,6 +10,10 @@ Plugins dieses Hauses an den Loxone Music Server, MusicServer4Home, eine
 eigene Adressvorlage, Alexa-NG oder Google-Lautsprecher (seit 3.1.8, ab Werk
 aus; Adresse und Vorlage nur im Heimnetz, die Sprechtoken in keiner Sicherung).
 
+## Neu in 3.1.25
+
+- Die Kopfzeile zeigt jetzt die installierte Fassung, einheitlich in allen Plugins.
+
 ## Neu in 3.1.24
 
 - **Neu – Prüfzeilen „Rechte der Konfiguration“ im Reiter Test:** Zwei Zeilen fragen, ob `wolf_ism8i.conf` und ihre Zweitschrift `<ordner>.backup.wolf_ism8i.conf` die Rechte 0600 tragen (seit 3.1.23 die Vorgabe). Gemessen werden die Rechte der echten Datei. Tragen sie etwas anderes, wird die Zeile rot und nennt die gefundenen Rechte und die Abhilfe (Speichern im Reiter Einstellungen schreibt beide Dateien mit 0600 neu). Fehlt eine Datei oder ist der LoxBerry-Ordner nicht bekannt, steht dort ein Strich mit eigener Aussage, kein Haken. Gemessen auf dem Arbeitsrechner (WSL, PHP 8.3) an sieben Fällen (0600, 0644, 0640, 4600, Datei fehlt, Zweitschrift fehlt, ohne LoxBerry-Ordner); am Gerät nicht gemessen.

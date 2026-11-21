@@ -73,7 +73,8 @@ if ($wi_p['home']) {
 if (wi_upgrade_laeuft()) {
     $wi_frame = class_exists('LBWeb', false);
     if ($wi_frame) {
-        LBWeb::lbheader('Wolf ISM8 Server', 'https://wiki.loxberry.de/', 'help.html');
+        require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+        LBWeb::lbheader(plugin_kopftitel('Wolf ISM8 Server', __DIR__), 'https://wiki.loxberry.de/', 'help.html');
     }
     echo '<div style="max-width:980px;margin:0 auto;'
        . 'font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">' . "\n"
@@ -812,7 +813,8 @@ foreach ($wi_dps as $d) {
 // WICHTIG: LBWeb::lbheader() setzt SDK-Globale - deshalb ueberall wi_-Praefix.
 $wi_frame = class_exists('LBWeb', false);
 if ($wi_frame) {
-    LBWeb::lbheader('Wolf ISM8 Server', 'https://wiki.loxberry.de/', 'help.html');
+    require_once __DIR__ . '/fassung.php';   // Fassung im Titel: gemeinsames Stueck fassung.php (21.11.2026)
+    LBWeb::lbheader(plugin_kopftitel('Wolf ISM8 Server', __DIR__), 'https://wiki.loxberry.de/', 'help.html');
 }
 /* O11 (Durchgang 02.10.2026): der eigene Teil der Seite geht durch einen
  * Puffer. Die Pruefzeilen "Tragen alle Formulare das Merkmal?" und "Setzt
