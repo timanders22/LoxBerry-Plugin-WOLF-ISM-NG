@@ -737,7 +737,7 @@ if ($wi_post && isset($_POST['save_ansage'])) {
     if ($wi_beanstandungen) {
         $wi_x2w = array();
         $wi_x2h = array('ansage_stoerung', 'ansage_ausfall', 'ansage_ruhe_ein', 'ansage_tafel_ein', 'ansage_homepod_ein');     // 3.1.17: Tafel und HomePod dazu
-        foreach (array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_sperre_min', 'ansage_tafel_namen', 'ansage_homepod_geraet') as $wi_f) { $wi_x2w[] = $wi_f; }
+        foreach (array('ansage_ruhe_von', 'ansage_ruhe_bis', 'ansage_ruhe_bis_frei' /* 3.1.26, Stamm 1.5.0 */, 'ansage_sperre_min', 'ansage_tafel_namen', 'ansage_homepod_geraet') as $wi_f) { $wi_x2w[] = $wi_f; }
         foreach (ansage_x2_felder(wi_ansage_opt()) as $wi_f) {
             if (substr($wi_f, -9) === '_loeschen') {
                 $wi_x2h[] = $wi_f;
