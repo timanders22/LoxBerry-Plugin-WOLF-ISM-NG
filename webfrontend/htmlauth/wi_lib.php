@@ -26,11 +26,13 @@
  * seit 3.1.8; seit 3.1.13 Stamm 1.2.1 mit weiteren Ausgabezielen, wi_mit_zielen(), Welle Mehrfach-Ziele).
  * Liegt neben dieser Datei; sie schuetzt sich selbst gegen doppeltes Laden. */
 require_once __DIR__ . '/sprachausgabe.php';
+require_once __DIR__ . '/meldung.php';     // Statusmeldungen an SignalBot (seit 3.1.27)
 /* 3.1.22: die Abschrift des gemeinsamen Sicherungsmoduls (Stammfassung Werkzeuge/gemeinsam/sicherung.php, byte-gleich,
  * Werkzeuge/sicherung_einbauen.py) liegt neben dieser Datei. "Einstellungen sichern" und "Einstellungen zurueckspielen"
  * laufen darueber, in allen Linien gleich (Auftrag des Hausherrn 12.11.2026); diese Linie uebergibt nur ihre
  * Beschreibung (wi_sicherung_beschreibung()). Antwortet als Einstieg mit 403. */
 require_once __DIR__ . '/sicherung.php';
+require_once __DIR__ . '/haus_bereiche.php';     // gemeinsame Bereiche unter haus/ (seit 3.1.27, Regeln/07)
 
 if (!function_exists('wi_e')) {
     /**
@@ -1306,6 +1308,9 @@ function wi_sicherung_beschreibung()
     }
     $schluessel['tts'] = sicherung_block($tts, $tts_knoten);
     $schluessel['ansage_regeln'] = sicherung_block(array_keys(ansage_regeln_vorgaben()));
+    /* 3.1.27: der Teil meldung auch als Block - ein unbekannter Unterschluessel wird dann verworfen und genannt (wie bei
+     * tts), statt die ganze Sicherung abzuweisen (Pruefstand-Vorablauf 24.11.2026, Zeile block). */
+    $schluessel['meldung'] = meld_sicherung_knoten(wi_meld_anlaesse(), wi_meld_k());
     return array(
         'kennzeichen' => 'LoxBerry-Plugin-WOLF-ISM-NG',
         'hinweis' => wi_t('EINST.SICH_KOPF_HINWEIS'),
@@ -1318,6 +1323,7 @@ function wi_sicherung_beschreibung()
         'teile' => array(
             'ansage_stoerung' => function ($w) { return wi_sicherung_teil_haken('ansage_stoerung', $w); },
             'ansage_ausfall' => function ($w) { return wi_sicherung_teil_haken('ansage_ausfall', $w); },
+            'meldung' => 'wi_sicherung_teil_meldung',     // 3.1.27
             'tts' => 'wi_sicherung_teil_tts',
             'ansage_regeln' => 'wi_sicherung_teil_regeln',
         ),
@@ -1343,6 +1349,16 @@ function wi_sicherung_beschreibung()
         't' => 'wi_t',
         'e' => 'wi_e',
     );
+}
+
+/** 3.1.27: Teil meldung (Meldungen an SignalBot): ein gueltiger Block, sonst abgewiesen mit den Beanstandungen des Moduls. */
+function wi_sicherung_teil_meldung($w)
+{
+    $f = meld_block_pruefen($w, wi_meld_anlaesse());
+    if (!$f) { return array($w, array()); }
+    $aus = array();
+    foreach ($f as $x) { $aus[] = 'meldung: ' . wi_e(meld_beanstandung_text($x, wi_meld_k())); }
+    return array(null, $aus);
 }
 
 /** Teil ansage_stoerung / ansage_ausfall: ein Haken 0 oder 1, wie bis 3.1.21. */
@@ -1570,6 +1586,7 @@ function wi_sicherung_daten($cfg)
     $teile = array(
         'ansage_stoerung' => (string) $a['stoerung'],
         'ansage_ausfall' => (string) $a['ausfall'],
+        'meldung' => $a['meldung'],     // 3.1.27
         'tts' => ansage_sicherung_bereinigen($a['tts']),
         'ansage_regeln' => wi_ansage_regeln($a),
     );
@@ -1600,7 +1617,7 @@ function wi_sicherung_speichern($neu, $jetzt, $r)
         return true;
     }
     $a = wi_ansage_lesen();
-    foreach (array('ansage_stoerung' => 'stoerung', 'ansage_ausfall' => 'ausfall', 'tts' => 'tts',
+    foreach (array('ansage_stoerung' => 'stoerung', 'ansage_ausfall' => 'ausfall', 'tts' => 'tts', 'meldung' => 'meldung',
                    'ansage_regeln' => 'ansage_regeln') as $teil => $feld) {
         if (array_key_exists($teil, $t) && $t[$teil] !== null) {
             $a[$feld] = $t[$teil];
@@ -3259,7 +3276,8 @@ function wi_ansage_anlaesse()
 /** Vorgaben: Ausgabe ab Werk EIN (3.1.14, nie gesetzt), beide Haken an. */
 function wi_ansage_vorgaben()
 {
-    return array('tts' => ansage_werk_block(), 'stoerung' => '1', 'ausfall' => '1', 'ansage_regeln' => array(), 'ansage_token_herkunft' => array());
+    return array('tts' => ansage_werk_block(), 'stoerung' => '1', 'ausfall' => '1', 'ansage_regeln' => array(), 'ansage_token_herkunft' => array(),
+                 'meldung' => meld_vorgaben(wi_meld_anlaesse(), wi_meld_haken_vorgabe()));     // 3.1.27: Meldungen an SignalBot, ab Werk aus
 }
 
 function wi_ansage_datei()
@@ -3299,6 +3317,8 @@ function wi_ansage_lesen()
     foreach (wi_ansage_anlaesse() as $n) {
         $a[$n] = (isset($d[$n]) && is_scalar($d[$n])) ? (string) $d[$n] : $v[$n];
     }
+    /* 3.1.27: der Block der Meldungen an SignalBot, wie er steht (gueltig oder nicht entscheidet meld_block()). */
+    $a['meldung'] = array_key_exists('meldung', $d) ? $d['meldung'] : $v['meldung'];
     return $a;
 }
 
@@ -3309,6 +3329,7 @@ function wi_ansage_schreiben($a)
     foreach (wi_ansage_anlaesse() as $n) {
         $aus[$n] = (string) $a[$n];
     }
+    if (isset($a['meldung'])) { $aus['meldung'] = $a['meldung']; }     // 3.1.27
     return wi_json_schreiben(wi_ansage_datei(), $aus, 0600);
 }
 
@@ -3486,6 +3507,8 @@ function wi_ansage_senden($jetzt = null)
         $conf = wi_ansage_lesen();
         wi_ansage_token_pflegen($conf);
         $conf = wi_ansage_lesen();
+        wi_meld_senden($frisch, $conf);     // 3.1.27: dieselben Anlaesse an SignalBot (eigene Haken)
+        $frisch = wi_meld_nur_ansage($frisch, $conf);     // die Ansage nur mit ihrem eigenen Haken
         $a = ansage_regel_sprechen($frisch, wi_ansage_tts($conf), wi_ansage_regeln($conf), wi_ansage_k());
         $erg = $a['regel'] !== '' ? $a['regel'] : 'gesprochen';
         if ($a['r'] !== null) {
@@ -3743,7 +3766,7 @@ function wi_ansage_takt($jetzt = null)
     $an = wi_ansage_an();
     $legen = array();
     foreach ($sagen as $anlass => $text) {
-        if (!$an || $a[$anlass] !== '1') {
+        if (!wi_meld_will($anlass, $a)) {     // 3.1.27: Ansage (Ausgabeart und Haken) oder Meldung an SignalBot
             continue;
         }
         $legen[] = array('schluessel' => $anlass, 'text' => $text, 'dringend' => $anlass === 'stoerung');
@@ -4633,4 +4656,142 @@ function wi_plausibel_pruefen()
         return array(false, sprintf(wi_t('PZ.PLAUS_NEIN'), implode(', ', $anders)));
     }
     return array(true, sprintf(wi_t('PZ.PLAUS_JA'), count($php)));
+}
+
+/**
+ * 3.1.27 (Entscheidung des Hausherrn 23.11.2026 "Nur gemeinsame Bereiche", Regeln/07): Zeile im Reiter Test -
+ * faellt das gespeicherte Themen-Praefix auf einen gemeinsamen Bereich unter haus/? Speichern und Zurueckspielen
+ * weisen ein solches Praefix ab; ein schon gespeichertes bleibt in Betrieb und ist hier rot, grau bei ausgeschaltetem MQTT.
+ * Liste und Pruefung aus dem gemeinsamen Modul haus_bereiche.php. Rueckgabe array(stand, html).
+ */
+function wi_pruef_praefix_haus($cfg)
+{
+    $p = (string) wi_cfg($cfg, 'praefix', 'wolf_ng');
+    $b = hb_bereich($p);
+    if ($b !== '') {
+        if (!(wi_cfg($cfg, 'mqtt', '1') === '1')) {
+            return array(-1, sprintf(wi_t('HAUSBEREICH.A_AUS'), strval($p), strval($b)));
+        }
+        return array(0, sprintf(wi_t('HAUSBEREICH.A_NEIN'), strval($p), strval($b)));
+    }
+    return array(1, sprintf(wi_t('HAUSBEREICH.A_JA'), strval($p)));
+}
+
+if (!function_exists('wi_meld_block')) {
+
+/* ---------------- Statusmeldungen an SignalBot (3.1.27, gemeinsames Modul meldung.php) ----------------
+ *
+ * Auftrag des Hausherrn 23.11.2026, Entscheidungen 23./24.11.2026: dieselben Anlaesse wie die Ansage, eigener Haken je
+ * Anlass, ab Werk aus; Sperre, Bremse und Versand im Modul. Die Erkennung laeuft auch ohne Ausgabeart, wenn eine Meldung
+ * eingeschaltet ist (wi_meld_aktiv()), und legt einen Anlass hin, wenn Ansage ODER Meldung ihn will
+ * (wi_meld_will()); der Sender trennt die Wege wieder (wi_meld_nur_ansage()).
+ */
+
+/** Die meldbaren Anlaesse: Name => Beschriftung (dieselben wie die Ansage). */
+function wi_meld_anlaesse()
+{
+    return array('stoerung' => wi_t('SPRACHAUSGABE.N_STOERUNG'), 'ausfall' => wi_t('SPRACHAUSGABE.N_AUSFALL'));
+}
+
+/** Die ab-Werk-Haken der Ansage dieser Linie: so stehen auch die Haken der Meldung, solange der Block nie gespeichert ist. */
+function wi_meld_haken_vorgabe()
+{
+    return array('stoerung' => 1, 'ausfall' => 1);
+}
+
+/** Ist der Haken dieses Anlasses fuer die ANSAGE gesetzt? */
+function wi_ansage_anlass_sprache($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    return in_array((string) $a, wi_ansage_anlaesse(), true) && is_array($cfg) && isset($cfg[$a])
+        && (string) $cfg[$a] === '1' && wi_ansage_an();
+}
+
+/** Der wirksame Block 'meldung' fuer den Betrieb (ungueltig gespeichert gilt als aus und wird im Formular genannt). */
+function wi_meld_block($cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    list($b) = meld_block(is_array($cfg) && array_key_exists('meldung', $cfg) ? $cfg['meldung'] : null, wi_meld_anlaesse(), wi_meld_haken_vorgabe());
+    return $b;
+}
+
+/** Die Beanstandungen eines gespeicherten Blocks (leer = gueltig). */
+function wi_meld_bean($cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    list(, $f) = meld_block(is_array($cfg) && array_key_exists('meldung', $cfg) ? $cfg['meldung'] : null, wi_meld_anlaesse(), wi_meld_haken_vorgabe());
+    return $f;
+}
+
+/** Ist irgendein Anlass zur Meldung eingeschaltet? Dann laeuft die Erkennung auch ohne Ausgabeart. */
+function wi_meld_aktiv($cfg = null)
+{
+    return meld_irgendein_an(wi_meld_block($cfg));
+}
+
+/** Will die Ansage ODER die Meldung diesen Anlass? */
+function wi_meld_will($a, $cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    return wi_ansage_anlass_sprache($a, $cfg) || meld_anlass_an(wi_meld_block($cfg), (string) $a);
+}
+
+/** Der Kontext des Moduls: Datenordner (data/plugins/<ordner>, daraus der Absender) und Texte - wie bei der Ansage. */
+function wi_meld_k()
+{
+    return wi_ansage_k();
+}
+
+/** Fuer die Ansage nur Eintraege, deren Ansage-Haken gesetzt ist; ein Eintrag ohne bekannten Anlass bleibt wie bisher. */
+function wi_meld_nur_ansage(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    $anl = wi_meld_anlaesse();
+    $aus = array();
+    foreach ($l as $e) {
+        if (is_array($e) && array_key_exists(meld_anlass_von($e), $anl) && !wi_ansage_anlass_sprache(meld_anlass_von($e), $cfg)) { continue; }
+        $aus[] = $e;
+    }
+    return $aus;
+}
+
+/** Die Eintraege an SignalBot melden. Protokoll: eine Zeile, wenn gesendet oder gescheitert (nie der Text). */
+function wi_meld_senden(array $l, $cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    $b = wi_meld_block($cfg);
+    if (empty($b['ein']) || !$l) { return null; }
+    $a = meld_regel_senden($l, $b, wi_meld_k());
+    if ($a['regel'] === '' || in_array($a['regel'], array('BREMSE', 'STAND', 'ORDNER'), true)) {
+        wi_ansage_zeile(meld_regel_kurz($a));
+    }
+    return $a;
+}
+
+/** Der Knopf "Testmeldung senden": array(angenommen, Satz). Geht an Haken, Sperre und Bremse vorbei. */
+function wi_meld_test()
+{
+    $r = meld_testmeldung(wi_meld_k());
+    wi_ansage_zeile('Testmeldung an SignalBot: ' . ($r[0] ? 'angenommen' : 'nicht angenommen'));
+    return $r;
+}
+
+/** Der Block im Einstellungsformular (unter den Ansage-Regeln, im selben Formular), mit Lage und Knopf. */
+function wi_meld_form_html($cfg = null)
+{
+    if ($cfg === null) { $cfg = wi_ansage_lesen(); }
+    $e = function ($s) { return htmlspecialchars((string) $s, ENT_QUOTES, 'UTF-8'); };
+    $k = wi_meld_k();
+    $o = array();
+    /* 3.1.27: unsichtbarer Doppel des Speicherknopfs VOR dem Knopf Testmeldung - die Eingabetaste in einem Textfeld
+     * loest den ersten Absendeknopf des Formulars aus; sie soll speichern wie bisher, nicht die Testmeldung senden. */
+    $o[] = '<button data-role="none" type="submit" name="save_ansage" value="1" tabindex="-1" aria-hidden="true" style="position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden"></button>';
+    $o[] = '<h3>' . $e(meld_t('TITEL', $k)) . '</h3>';
+    $o[] = meld_formular_html(wi_meld_block($cfg), wi_meld_anlaesse(), array(), $k);
+    list(, $lage) = meld_pruefzeile(wi_meld_block($cfg), wi_meld_bean($cfg), $k);
+    $o[] = '<div class="sm-hilfe">' . $e(meld_t('F_TEST', $k) . ' ' . $lage) . '</div>';
+    $o[] = '<div class="sm-knopfreihe"><button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="meld_test" value="1">'
+         . $e(meld_t('K_TEST', $k)) . '</button></div>';
+    return implode("\n", $o) . "\n";
+}
 }

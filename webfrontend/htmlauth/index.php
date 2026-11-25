@@ -451,6 +451,12 @@ if ($wi_post && isset($_POST['test']) && is_string($_POST['test'])) {
 
 /* Welle Mehrfach-Ziele (Sprachmodul 1.2.1): die Knoepfe "Testansage an Ziel n" schicken ansage_test_ziel=n - es spricht
  * nur dieses Ziel; der bisherige Knopf spricht an alle Ziele gleichzeitig. Eine unbrauchbare Nummer spricht nichts. */
+/* 3.1.27: Testmeldung an SignalBot (Knopf unter den Ansage-Regeln). */
+if ($wi_post && isset($_POST['meld_test'])) {
+    list($meld_ok, $meld_satz) = wi_meld_test();
+    if ($meld_ok) { $wi_test_titel = wi_t('SPRACHAUSGABE.TEST_TITEL'); $wi_test_text = $meld_satz; $wi_test_tab = 'tab-test'; } else { $wi_test_titel = wi_t('SPRACHAUSGABE.TEST_TITEL'); $wi_test_text = $meld_satz; $wi_test_tab = 'tab-test'; }
+    $wi_tab = 'tab-test';
+}
 if ($wi_post && (isset($_POST['ansage_test']) || isset($_POST['ansage_test_ziel']))) {
     /* Testansage (Nr. 36 b) wie wi_test_ausfuehren('ansage_test'): Titel und Text in den Reiter Test, ins Protokoll nur
      * die Kurzform. */
@@ -726,6 +732,8 @@ if ($wi_post && isset($_POST['save_ansage'])) {
                                           wi_ansage_opt() + array(
                                           'ziele' => wi_mit_zielen(), 'token_vor_ort' => true, 'aus_gewinnt' => true), wi_ansage_k(), $wi_thinw);
     list($wi_an['ansage_regeln']) = ansage_regeln_formular($_POST, wi_ansage_regeln($wi_av), array(), $wi_tmangel, $wi_tbean, wi_ansage_k());     // S2: Wann gesprochen wird (Stamm)
+    // 3.1.27: der Block 'Meldungen an SignalBot' (eine Beanstandung haelt das Speichern an, wie die Ansage)
+    $wi_an['meldung'] = meld_formular_lesen($_POST, isset($wi_av['meldung']) ? $wi_av['meldung'] : null, wi_meld_anlaesse(), $wi_tmangel, $wi_tbean, wi_meld_k(), wi_meld_haken_vorgabe());
     // 3.1.17: ein eingetipptes oder geloeschtes Sprechtoken ist nicht mehr vom Nachbarn; bis 3.1.16 ueberschrieb es der naechste Abgleich.
     $wi_an['ansage_token_herkunft'] = ansage_token_herkunft_formular($_POST, isset($wi_av['ansage_token_herkunft']) ? $wi_av['ansage_token_herkunft'] : array());
     foreach (wi_ansage_anlaesse() as $wi_n) {
@@ -1144,6 +1152,7 @@ $wi_ans = wi_ansage_lesen(); ?>
     'm' => function ($n) { return wi_fm(wi_ziele_x2_name($n)); },
     'c' => function ($n, $g) { return wi_fh('ansage', $n, $g); },
     'token_vor_ort' => true), wi_ansage_k()) ?>
+<?= wi_meld_form_html(wi_ansage_lesen()) ?>
 <div class="sm-small"><?= wi_e(wi_t('SPRACHAUSGABE.TEST_HINWEIS')) ?></div>
 <button data-role="none" class="sm-btn sm-b-aktion" type="submit" name="save_ansage" value="1"><?= wi_e(wi_t('SPRACHAUSGABE.SPEICHERN')) ?></button>
 </form>

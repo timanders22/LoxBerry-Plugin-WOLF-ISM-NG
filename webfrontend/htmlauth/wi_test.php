@@ -112,6 +112,10 @@ function wi_pruefzeilen($cfg)
     $z[] = array($an ? 1 : -1, wi_t('PZ.EIN'),
                  $an ? wi_t('PZ.EIN_JA') : wi_t('PZ.EIN_NEIN'));
 
+    // 3.1.27: faellt das Themen-Praefix auf einen gemeinsamen Bereich unter haus/ (Regeln/07)?
+    $wi_hb = wi_pruef_praefix_haus($cfg);
+    $z[] = array($wi_hb[0], wi_t('HAUSBEREICH.F_TEST'), $wi_hb[1]);
+
     $wd = wi_server_pid();
     $z[] = array($wd ? 1 : ($an ? 0 : -1), wi_t('PZ.WATCHDOG'),
                  $wd ? sprintf(wi_t('PZ.PID'), $wd) : ($an ? wi_t('PZ.LAEUFT_NICHT') : wi_t('PZ.AUS_GEWOLLT')));
